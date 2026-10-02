@@ -21,23 +21,23 @@ use unarc::security::integrity::{
 struct Args {
     /// Path to release artifact file (executable or tar.gz)
     #[arg(long)]
-    artifact: PathBuf,
+    artifact: Option<PathBuf>,
 
     /// Target operating system (e.g. macos, linux)
     #[arg(long)]
-    os: String,
+    os: Option<String>,
 
     /// Target architecture (e.g. aarch64, arm64, x86_64)
     #[arg(long)]
-    arch: String,
+    arch: Option<String>,
 
     /// Release version (e.g. 0.2.0)
     #[arg(long)]
-    version: String,
+    version: Option<String>,
 
     /// Output path for signed manifest.json
     #[arg(long)]
-    out_manifest: PathBuf,
+    out_manifest: Option<PathBuf>,
 
     /// Optional relative or absolute artifact download URL to record in manifest
     #[arg(long)]
@@ -50,16 +50,61 @@ struct Args {
     /// Strict release mode: requires explicit valid RELEASE_SIGNING_KEY secret
     #[arg(long)]
     strict: bool,
+
+    /// Verify an existing manifest file against the official embedded trust anchor
+    #[arg(long)]
+    verify_manifest: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    if !args.artifact.exists() {
-        eprintln!(
-            "Error: Artifact file not found at: {}",
-            args.artifact.display()
+    // Verification-only mode: verifies manifest signature and (if present) artifact hash
+    if let Some(ref manifest_path) = args.verify_manifest {
+        println!("Verifying release manifest: {}", manifest_path.display());
+        let content = fs::read_to_string(manifest_path)?;
+        let manifest: ReleaseManifest = serde_json::from_str(&content)?;
+
+        let verifier = ReleaseSignatureVerifier::official();
+        manifest.verify_signature(&verifier)?;
+        println!("  -> Ed25519 signature: VALID (verified with official embedded trust anchor)");
+        println!("  -> Manifest Version:  {}", manifest.version);
+        println!(
+            "  -> Manifest Target:   {}-{}",
+            manifest.target_os, manifest.target_arch
         );
+        println!("  -> Bundled 7zz Hash:  {}", manifest.bundled_7zz_sha256);
+        println!("  -> Artifact Hash:     {}", manifest.artifact_sha256);
+
+        let parent = manifest_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let artifact_path = parent.join(&manifest.artifact_url);
+        if artifact_path.exists() {
+            let actual_hash = compute_sha256(&artifact_path)?;
+            if actual_hash != manifest.artifact_sha256 {
+                eprintln!(
+                    "Error: Artifact SHA-256 mismatch! Manifest: {}, Actual: {}",
+                    manifest.artifact_sha256, actual_hash
+                );
+                std::process::exit(1);
+            }
+            println!(
+                "  -> Artifact File:     {} (SHA-256 MATCH)",
+                artifact_path.display()
+            );
+        }
+        println!("Manifest verification SUCCESS.");
+        return Ok(());
+    }
+
+    let artifact = args.artifact.unwrap_or_else(|| {
+        eprintln!("Error: --artifact is required when not in --verify-manifest mode");
+        std::process::exit(1);
+    });
+
+    if !artifact.exists() {
+        eprintln!("Error: Artifact file not found at: {}", artifact.display());
         std::process::exit(1);
     }
 
@@ -101,16 +146,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         SigningKey::from_bytes(&OFFICIAL_RELEASE_SIGNING_SEED)
     };
 
+    let os = args.os.unwrap_or_else(|| {
+        eprintln!("Error: --os is required when not in --verify-manifest mode");
+        std::process::exit(1);
+    });
+    let arch = args.arch.unwrap_or_else(|| {
+        eprintln!("Error: --arch is required when not in --verify-manifest mode");
+        std::process::exit(1);
+    });
+    let version = args.version.unwrap_or_else(|| {
+        eprintln!("Error: --version is required when not in --verify-manifest mode");
+        std::process::exit(1);
+    });
+    let out_manifest = args.out_manifest.unwrap_or_else(|| {
+        eprintln!("Error: --out-manifest is required when not in --verify-manifest mode");
+        std::process::exit(1);
+    });
+
     // 2. Compute SHA-256 of artifact
-    let artifact_sha256 = compute_sha256(&args.artifact)?;
-    println!("Artifact: {}", args.artifact.display());
+    let artifact_sha256 = compute_sha256(&artifact)?;
+    println!("Artifact: {}", artifact.display());
     println!("Artifact SHA-256: {}", artifact_sha256);
 
     // 3. Resolve expected bundled 7zz SHA-256
     let bundled_7zz_sha256 = if let Some(hash) = args.bundled_7zz_sha256 {
         hash
     } else {
-        match (args.os.as_str(), args.arch.as_str()) {
+        match (os.as_str(), arch.as_str()) {
             ("macos", _) => {
                 unarc::security::integrity::EXPECTED_ENGINE_BINARY_SHA256_MACOS.to_string()
             }
@@ -121,17 +183,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 unarc::security::integrity::EXPECTED_ENGINE_BINARY_SHA256_LINUX_X64.to_string()
             }
             _ => {
-                eprintln!(
-                    "Warning: Unknown OS/Arch combination: {}-{}",
-                    args.os, args.arch
-                );
+                eprintln!("Warning: Unknown OS/Arch combination: {}-{}", os, arch);
                 unarc::security::integrity::EXPECTED_ENGINE_BINARY_SHA256_LINUX_X64.to_string()
             }
         }
     };
 
-    let filename = args
-        .artifact
+    let filename = artifact
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or("unarc");
@@ -139,9 +197,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Construct manifest
     let mut manifest = ReleaseManifest {
-        version: args.version,
-        target_os: args.os,
-        target_arch: args.arch,
+        version,
+        target_os: os,
+        target_arch: arch,
         bundled_7zz_version: PINNED_7ZIP_VERSION.to_string(),
         bundled_7zz_sha256,
         artifact_url,
@@ -160,16 +218,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 7. Write manifest.json
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
-    fs::write(&args.out_manifest, manifest_json)?;
-    println!("Saved signed manifest to: {}", args.out_manifest.display());
+    fs::write(&out_manifest, manifest_json)?;
+    println!("Saved signed manifest to: {}", out_manifest.display());
 
     // 8. Write accompanying .sha256 checksum file
-    let sha_file = args.artifact.with_extension(format!(
+    let sha_file = artifact.with_extension(format!(
         "{}.sha256",
-        args.artifact
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
+        artifact.extension().and_then(|e| e.to_str()).unwrap_or("")
     ));
     fs::write(&sha_file, format!("{artifact_sha256}  {filename}\n"))?;
     println!("Saved SHA-256 checksum to: {}", sha_file.display());

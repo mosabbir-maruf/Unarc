@@ -41,6 +41,10 @@ docker cp "${DIR}/tests" "${CONTAINER_ID}:/workspace/"
 docker start -a "${CONTAINER_ID}"
 mkdir -p "${DIR}/target/aarch64-apple-darwin/release"
 docker cp "${CONTAINER_ID}:/workspace/target/aarch64-apple-darwin/release/unarc" "${DIR}/target/aarch64-apple-darwin/release/"
+docker cp "${CONTAINER_ID}:/workspace/target/aarch64-apple-darwin/release/unarc-sign" "${DIR}/target/aarch64-apple-darwin/release/" || true
 docker rm -f "${CONTAINER_ID}" >/dev/null 2>&1 || true
 chmod +x "${DIR}/target/aarch64-apple-darwin/release/unarc"
+if [ -f "${DIR}/target/aarch64-apple-darwin/release/unarc-sign" ]; then
+    chmod +x "${DIR}/target/aarch64-apple-darwin/release/unarc-sign"
+fi
 file "${DIR}/target/aarch64-apple-darwin/release/unarc"

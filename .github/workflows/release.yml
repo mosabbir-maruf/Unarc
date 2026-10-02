@@ -51,8 +51,15 @@ jobs:
         run: |
           cd release-dist
           for sha_file in *.sha256; do
-            echo "Verifying ${sha_file}..."
+            echo "Verifying checksum ${sha_file}..."
             sha256sum -c "${sha_file}"
+          done
+
+          # Compile unarc-sign tool to verify cryptographic signatures against official embedded trust anchor
+          cargo build --release --bin unarc-sign
+          for manifest in *.manifest.json; do
+            echo "Verifying cryptographic signature and artifact match for ${manifest}..."
+            ../target/release/unarc-sign --verify-manifest "${manifest}"
           done
 
       - name: Create GitHub Release

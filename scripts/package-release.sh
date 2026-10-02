@@ -46,11 +46,9 @@ if [ -f "${DIR}/README.md" ]; then
 fi
 if [ -f "${DIR}/LICENSE" ]; then
     cp "${DIR}/LICENSE" "${STAGE_DIR}/${PACKAGE_NAME}/"
-elif [ -f "${DIR}/LICENSE-MIT" ]; then
-    cp "${DIR}/LICENSE-MIT" "${STAGE_DIR}/${PACKAGE_NAME}/LICENSE"
-else
-    # Create standard dual license declaration
-    echo "Unarc is dual-licensed under MIT or Apache-2.0." > "${STAGE_DIR}/${PACKAGE_NAME}/LICENSE"
+fi
+if [ -f "${DIR}/THIRD-PARTY-NOTICES" ]; then
+    cp "${DIR}/THIRD-PARTY-NOTICES" "${STAGE_DIR}/${PACKAGE_NAME}/"
 fi
 
 # Create tar.gz bundle

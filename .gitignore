@@ -19,4 +19,10 @@ Cargo.lock.backup
 tmp/
 temp/
 dist/
+release-dist/
 *.log
+.unarc_scratch_*
+.unarc_staging_*
+unarc-*.tar.gz
+unarc-*.sha256
+unarc-*.manifest.json

@@ -1,19 +1,20 @@
 # Unarc
 
-A production-grade, security-focused archive utility CLI in Rust.
+An open-source, production-grade, security-focused archive utility CLI in Rust.
 
-Designed targeting **macOS Apple Silicon** first, with full **Docker/Linux** development and CI support. Unarc enforces zero-trust path validation, interactive terminal UX, and a hermetically bundled archive engine.
+Designed targeting **macOS Apple Silicon** (`aarch64-apple-darwin`) first, with full **Linux** (`x86_64`, `aarch64`) and **Docker** production container support. Unarc enforces zero-trust path validation, interactive terminal UX, and a hermetically bundled archive engine.
 
 ---
 
 ## Key Principles & Scope
 
+- **Open Source & Permissive**: Unarc is open source and licensed under the MIT License.
 - **Zero Host Pollution**: All Rust compilation, formatting, linting, and testing run strictly inside pinned Docker containers (`rust:1.85.0-slim`).
-- **Hermetic Pinned Archive Engine**: Bundles an exact official release of 7-Zip (`7zz v26.03`). The engine is verified by SHA-256 and never downloaded at runtime or invoked from host package managers (like Homebrew).
+- **Hermetic Pinned Archive Engine**: Bundles an exact official release of 7-Zip (`7zz v26.03`). The engine is verified by SHA-256 and never downloaded at runtime or invoked from host package managers (like Homebrew). The bundled engine is separately licensed (GNU LGPL v2.1+ with unRAR restriction).
 - **Interactive & Scriptable UX**: Supports both direct script commands and an interactive terminal shell with an ASCII wordmark, `/` command suggestions, arrow-key navigation, and Tab completion.
 - **Zero-Trust Extraction**: Comprehensive path traversal protection (`Zip Slip`), absolute path rejection, null-byte checks, and boundary containment enforcement.
 - **Production Reliability & Cleanup**: Deterministic exit codes, clean SIGINT/SIGTERM cancellation without zombie processes, and automatic partial extraction cleanup on failure.
-- **Privacy & Safety**: No telemetry, analytics, updater, network services, background daemons, persistent state, or uncoordinated file logging.
+- **Privacy & Safety**: Completely offline extraction behavior, zero telemetry, zero analytics, zero background daemons, no automatic background updaters, no persistent state, and zero uncoordinated file logging. Updates run strictly via explicit user invocation (`unarc update`).
 
 ---
 
@@ -291,3 +292,13 @@ Every release manifest is cryptographically signed using Unarc's release key. Th
 - **macOS Native**: Uses native Seatbelt sandbox (`sandbox-exec`) where kernel confinement is available, strictly scoping file reads to resolved archive volumes, writes to output destination, and denying network access.
 - **Linux Container**: Enforces process group isolation, environment purging, `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG`, and relies on host container boundaries (`--network none`, `--read-only`, `--cap-drop ALL`, non-root user). Kernel-level LSM sandboxing is reported accurately as `DEGRADED` in containerized environments.
 - **Zero Silent Fallback**: If required security constraints fail, Unarc fails closed with structured exit codes.
+
+---
+
+## License & Third-Party Notices
+
+Unarc is open-source software licensed under the **[MIT License](LICENSE)**.
+
+- **Unarc Codebase**: Licensed under the MIT License (see [LICENSE](LICENSE)). Copyright (c) 2026 Unarc Contributors.
+- **Bundled Engine (7-Zip / 7zz)**: Pinned 7-Zip (`7zz v26.03`) is developed by Igor Pavlov and is separately licensed under the **GNU LGPL v2.1+** (with the unRAR license restriction for RAR archive decompression and BSD/Public Domain portions for LZMA and 7z components). See [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) for details and full license terms.
+- **Third-Party Dependencies**: All third-party Rust libraries retain their original permissive licenses (MIT, Apache-2.0, BSD-3-Clause). Complete notices and dependency attributions are available in [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).

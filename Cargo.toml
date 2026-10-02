@@ -6,7 +6,7 @@ rust-version = "1.85.0"
 description = "Production-grade, security-focused archive utility"
 authors = ["Unarc Contributors"]
 readme = "README.md"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

@@ -35,10 +35,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up pinned Rust toolchain (1.85.0)
+        uses: dtolnay/rust-toolchain@1.85.0
+
       - name: Download all release artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: 'release-*'
           path: artifacts/
+          merge-multiple: true
 
       - name: Organize release assets
         run: |
@@ -49,14 +54,15 @@ jobs:
 
       - name: Verify release checksums & signatures before publication
         run: |
+          # Compile unarc-sign tool to verify cryptographic signatures against official embedded trust anchor
+          cargo build --release --bin unarc-sign
+
           cd release-dist
           for sha_file in *.sha256; do
             echo "Verifying checksum ${sha_file}..."
             sha256sum -c "${sha_file}"
           done
 
-          # Compile unarc-sign tool to verify cryptographic signatures against official embedded trust anchor
-          cargo build --release --bin unarc-sign
           for manifest in *.manifest.json; do
             echo "Verifying cryptographic signature and artifact match for ${manifest}..."
             ../target/release/unarc-sign --verify-manifest "${manifest}"

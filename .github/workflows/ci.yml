@@ -10,15 +10,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  ci:
-    name: Verify (Docker Pinned Toolchain 1.85.0)
+  verify:
+    name: Verify (Pinned Toolchain 1.85.0)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Build development Docker image
-        run: docker build -t unarc-dev .
+        run: docker build --target dev -t unarc-dev .
 
       - name: Check code formatting
         run: docker run --rm -v "$PWD:/workspace" -w /workspace unarc-dev cargo fmt --all -- --check
@@ -29,5 +29,19 @@ jobs:
       - name: Run unit and integration tests
         run: docker run --rm -v "$PWD:/workspace" -w /workspace unarc-dev cargo test --all-targets
 
-      - name: Build release binary
-        run: docker run --rm -v "$PWD:/workspace" -w /workspace unarc-dev cargo build --release
+      - name: Build release binaries
+        run: docker run --rm -v "$PWD:/workspace" -w /workspace unarc-dev cargo build --release --all-targets
+
+  hardened-docker:
+    name: Hardened Docker Runtime Verification
+    runs-on: ubuntu-latest
+    needs: [verify]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build hardened distroless production image
+        run: docker build -t unarc:latest .
+
+      - name: Run hardened Docker runtime verification suite
+        run: ./scripts/verify-docker.sh unarc:latest

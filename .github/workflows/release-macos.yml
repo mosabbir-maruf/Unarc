@@ -1,0 +1,62 @@
+name: Release macOS (Apple Silicon arm64)
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      RELEASE_SIGNING_KEY:
+        required: false
+
+jobs:
+  build-macos:
+    name: Build & Package macOS arm64 Release
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain (1.85.0)
+        uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Download & verify pinned 7zz for macOS
+        run: |
+          mkdir -p target/release
+          EXPECTED_SHA="5ca87677072c59f5602e5c49baa27d4694bacd2259b4e507f0094249d4281480"
+          curl -sSL "https://github.com/ip7z/7zip/releases/download/26.03/7z2603-mac.tar.xz" -o /tmp/7z-mac.tar.xz
+          echo "${EXPECTED_SHA}  /tmp/7z-mac.tar.xz" | shasum -a 256 -c -
+          tar -xJf /tmp/7z-mac.tar.xz -C target/release 7zz
+          chmod 0755 target/release/7zz
+          ENGINE_SHA=$(shasum -a 256 target/release/7zz | awk '{print $1}')
+          EXPECTED_ENGINE_SHA="74b0910e50ea44d9760a57fada2192cfd530ba8bffbe7b47c412a464b796cabf"
+          if [ "${ENGINE_SHA}" != "${EXPECTED_ENGINE_SHA}" ]; then
+            echo "Error: Bundled 7zz binary hash mismatch: ${ENGINE_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Build release binaries
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Stage native binaries
+        run: |
+          cp target/aarch64-apple-darwin/release/unarc target/release/unarc
+          cp target/aarch64-apple-darwin/release/unarc-sign target/release/unarc-sign
+          file target/release/unarc | grep "arm64"
+
+      - name: Run native smoke tests & diagnostics
+        run: |
+          ./target/release/unarc version
+          ./target/release/unarc doctor
+
+      - name: Package, hash, and sign release artifact
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: ./scripts/package-release.sh macos arm64 target/release
+
+      - name: Upload macOS release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-arm64
+          path: dist/unarc-*-macos-arm64*
+          retention-days: 5

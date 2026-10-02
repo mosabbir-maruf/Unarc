@@ -1,5 +1,5 @@
 # Pinned Rust toolchain for Unarc development and CI
-FROM rust:1.85.0-slim
+FROM rust:1.85.0-slim AS dev
 
 # Install system dependencies needed for engine bundling
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -38,3 +38,39 @@ WORKDIR /workspace
 
 # Default command
 CMD ["cargo", "test"]
+
+# ==============================================================================
+# Stage 2: Production Builder
+# ==============================================================================
+FROM dev AS builder
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY tests ./tests
+RUN cargo build --release
+
+# ==============================================================================
+# Stage 3: Hardened Distroless Production Runtime
+# ==============================================================================
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+
+# Copy authentic pinned 7zz engine
+COPY --from=dev --chown=65532:65532 /opt/unarc/bin/7zz /opt/unarc/bin/7zz
+
+# Copy compiled unarc binary
+COPY --from=builder --chown=65532:65532 /build/target/release/unarc /usr/local/bin/unarc
+
+# Pinned engine environment
+ENV UNARC_BUNDLED_7ZZ=/opt/unarc/bin/7zz
+
+# Read-only root compatibility: declare /tmp as a volume for scratch staging
+VOLUME ["/tmp"]
+
+# Run strictly as non-root user (nonroot:nonroot, UID 65532)
+USER 65532:65532
+
+WORKDIR /tmp
+
+ENTRYPOINT ["/usr/local/bin/unarc"]
+CMD ["--help"]

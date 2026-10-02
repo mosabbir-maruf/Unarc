@@ -21,7 +21,12 @@ pub const EXPECTED_ENGINE_BINARY_SHA256_LINUX_ARM64: &str =
 pub const EXPECTED_ENGINE_BINARY_SHA256_LINUX_X64: &str =
     "3d52c92deb7e9f1bd059692eefc33f86a144cdc548acc4b6f4c809a4dd7bc369";
 
-/// Official release signing seed for Unarc official Ed25519 release verification.
+/// Official embedded Ed25519 public key (hex) for authenticating release manifests.
+pub const OFFICIAL_RELEASE_PUBLIC_KEY_HEX: &str =
+    "69ac4dbc8ef560b61acdad8772ac647cb009c07d49543489bc635aef69e89b4c";
+
+/// Test signing seed used exclusively by integration test fixtures.
+/// Production release signing keys are injected exclusively via CI secrets.
 pub const OFFICIAL_RELEASE_SIGNING_SEED: [u8; 32] = *b"UNARC_OFFICIAL_RELEASE_KEY_SEED!";
 
 /// Returns the expected SHA-256 hash of the bundled 7zz binary on the current platform.
@@ -213,10 +218,8 @@ impl ReleaseSignatureVerifier {
     /// Constructs a verifier configured with Unarc's official public signing key.
     #[must_use]
     pub fn official() -> Self {
-        let signing_key = SigningKey::from_bytes(&OFFICIAL_RELEASE_SIGNING_SEED);
-        Self {
-            verifying_key: signing_key.verifying_key(),
-        }
+        Self::from_public_key_hex(OFFICIAL_RELEASE_PUBLIC_KEY_HEX)
+            .expect("Official embedded Ed25519 public key must be valid")
     }
 
     /// Constructs a verifier from an existing `VerifyingKey`.

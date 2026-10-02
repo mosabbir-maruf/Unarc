@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release-macos:
+    name: macOS Release Artifact
+    uses: ./.github/workflows/release-macos.yml
+    secrets:
+      RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+
+  release-linux:
+    name: Linux Release Artifacts
+    uses: ./.github/workflows/release-linux.yml
+    secrets:
+      RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+
+  publish-docker:
+    name: Publish GHCR Container Image
+    uses: ./.github/workflows/docker-publish.yml
+
+  publish-release:
+    name: Publish GitHub Release with Cryptographic Manifests
+    runs-on: ubuntu-latest
+    needs: [release-macos, release-linux, publish-docker]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Organize release assets
+        run: |
+          mkdir -p release-dist
+          find artifacts/ -type f -exec cp {} release-dist/ \;
+          echo "=== Release Assets to Publish ==="
+          ls -la release-dist/
+
+      - name: Verify release checksums & signatures before publication
+        run: |
+          cd release-dist
+          for sha_file in *.sha256; do
+            echo "Verifying ${sha_file}..."
+            sha256sum -c "${sha_file}"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-dist/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          make_latest: true

@@ -431,18 +431,35 @@ fn apply_process_isolation(cmd: &mut Command, policy: &ProcessSandboxPolicy) {
 
 /// Helper probing whether basic process isolation and environment scrubbing is functional.
 fn probe_process_isolation() -> bool {
-    let mut cmd = Command::new("/bin/sh");
-    cmd.args(["-c", "echo probe_ok"]);
-    cmd.env_clear();
-    cmd.env("PATH", "/usr/bin:/bin");
-    #[cfg(unix)]
-    cmd.process_group(0);
-    match cmd.output() {
-        Ok(out) => {
-            out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "probe_ok"
+    // 1. Try bundled engine first (hermetic, works in distroless where /bin/sh is absent)
+    if let Ok(engine) = crate::archive::bundled::resolve_bundled_engine() {
+        let mut cmd = Command::new(engine);
+        cmd.env_clear();
+        cmd.env("PATH", "/usr/bin:/bin:/usr/local/bin");
+        #[cfg(unix)]
+        cmd.process_group(0);
+        if let Ok(out) = cmd.output() {
+            if out.status.success() {
+                return true;
+            }
         }
-        Err(_) => false,
     }
+
+    // 2. Try standard shell if present (e.g. host environments)
+    if Path::new("/bin/sh").exists() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "echo probe_ok"]);
+        cmd.env_clear();
+        cmd.env("PATH", "/usr/bin:/bin");
+        #[cfg(unix)]
+        cmd.process_group(0);
+        if let Ok(out) = cmd.output() {
+            return out.status.success()
+                && String::from_utf8_lossy(&out.stdout).trim() == "probe_ok";
+        }
+    }
+
+    false
 }
 
 /// Generates a macOS Seatbelt Profile Language (SBPL) profile for native process confinement.

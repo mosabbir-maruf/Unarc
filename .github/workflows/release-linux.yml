@@ -1,0 +1,76 @@
+name: Release Linux
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      RELEASE_SIGNING_KEY:
+        required: false
+
+jobs:
+  build-linux:
+    name: Build & Package Linux (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: x86_64
+            runner: ubuntu-latest
+            engine_tar: "7z2603-linux-x64.tar.xz"
+            engine_tar_sha: "dc99eff5008f1ab79bd7084c68513701547a808a89502bf4133683535ab3c695"
+            engine_bin_sha: "3d52c92deb7e9f1bd059692eefc33f86a144cdc548acc4b6f4c809a4dd7bc369"
+          - target: aarch64-unknown-linux-gnu
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+            engine_tar: "7z2603-linux-arm64.tar.xz"
+            engine_tar_sha: "2389ba20e4d8295e8709c20b6263b69bd1ec4972fe38a04ad7a1badbf595b996"
+            engine_bin_sha: "9a26e7d54bfdae8a8f1750cdb70697547b738c2334aa89f3d3f2c8645c8443fe"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain (1.85.0)
+        uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Download & verify pinned 7zz engine
+        run: |
+          mkdir -p target/release
+          curl -sSL "https://github.com/ip7z/7zip/releases/download/26.03/${{ matrix.engine_tar }}" -o /tmp/7z.tar.xz
+          echo "${{ matrix.engine_tar_sha }}  /tmp/7z.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/7z.tar.xz -C target/release 7zz
+          chmod 0755 target/release/7zz
+          ACTUAL_SHA=$(sha256sum target/release/7zz | awk '{print $1}')
+          if [ "${ACTUAL_SHA}" != "${{ matrix.engine_bin_sha }}" ]; then
+            echo "Error: 7zz binary hash mismatch: ${ACTUAL_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Build release binaries
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage native binaries
+        run: |
+          cp target/${{ matrix.target }}/release/unarc target/release/unarc
+          cp target/${{ matrix.target }}/release/unarc-sign target/release/unarc-sign
+          file target/release/unarc
+
+      - name: Smoke test & doctor probe
+        run: |
+          ./target/release/unarc version
+          ./target/release/unarc doctor
+
+      - name: Package, hash, and sign release artifact
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: ./scripts/package-release.sh linux ${{ matrix.arch }} target/release
+
+      - name: Upload Linux release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: dist/unarc-*-linux-${{ matrix.arch }}*
+          retention-days: 5

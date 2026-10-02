@@ -12,12 +12,16 @@ help:
 	@echo "  make build        - Compile debug binary inside Docker"
 	@echo "  make release      - Compile optimized release binary inside Docker"
 	@echo "  make docker-build - Rebuild development Docker image"
+	@echo "  make docker-prod  - Build hardened distroless production runtime Docker image"
 	@echo "  make clean        - Remove local build artifacts"
 
 all: check
 
 docker-build:
-	docker build -t unarc-dev .
+	docker build --target dev -t unarc-dev .
+
+docker-prod:
+	docker build -t unarc:latest .
 
 fmt:
 	./scripts/dev.sh fmt

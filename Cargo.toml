@@ -28,6 +28,10 @@ path = "src/lib.rs"
 name = "unarc"
 path = "src/main.rs"
 
+[[bin]]
+name = "unarc-sign"
+path = "src/bin/unarc-sign.rs"
+
 [profile.release]
 opt-level = 3
 lto = true

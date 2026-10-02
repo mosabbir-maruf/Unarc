@@ -174,4 +174,120 @@ make release
 
 # Run performance benchmark suite
 make bench
+
+# Build production hardened distroless Docker image
+make docker-prod
 ```
+
+---
+
+## Native macOS Installation (Apple Silicon arm64)
+
+Unarc provides self-contained native release packages for macOS Apple Silicon (`aarch64-apple-darwin`).
+**Zero dependencies required**: End users do not need Rust, Cargo, Homebrew, Python, Docker, or system-installed 7-Zip.
+
+### 1. Download & Verify Release Artifacts
+
+Every GitHub Release includes three matching artifacts:
+- `unarc-<version>-macos-arm64.tar.gz` (Archive bundle containing `unarc`, authentic pinned `7zz`, and docs)
+- `unarc-<version>-macos-arm64.tar.gz.sha256` (SHA-256 digest)
+- `unarc-<version>-macos-arm64.manifest.json` (Cryptographically signed Ed25519 metadata manifest)
+
+```bash
+# 1. Verify SHA-256 checksum
+shasum -a 256 -c unarc-0.2.0-macos-arm64.tar.gz.sha256
+
+# 2. Extract into user binary directory
+mkdir -p ~/.local/bin
+tar -xzf unarc-0.2.0-macos-arm64.tar.gz -C /tmp
+mv /tmp/unarc-0.2.0-macos-arm64/unarc ~/.local/bin/
+mv /tmp/unarc-0.2.0-macos-arm64/7zz ~/.local/bin/
+rm -rf /tmp/unarc-0.2.0-macos-arm64
+
+# 3. Verify installation integrity
+unarc version
+unarc doctor
+```
+
+---
+
+## Hardened Docker Runtime (Production Linux Container)
+
+Unarc is distributed as an ultra-minimal, hardened container image on GitHub Container Registry (GHCR): `ghcr.io/<owner>/unarc:<version>`.
+
+### Container Hardening Specifications
+
+- **Minimal Distroless Base**: Based on `gcr.io/distroless/cc-debian12:nonroot`.
+- **Zero Build / Development Tools**: Contains NO Rust toolchain, Cargo, gcc, make, curl, git, Python, apt, or dpkg.
+- **No Shell Tooling**: Contains NO `/bin/sh` or `/bin/bash` in the runtime image.
+- **Strict Non-Root Execution**: Runs strictly under unprivileged user `nonroot:nonroot` (`UID:GID 65532:65532`).
+- **Read-Only Root Filesystem**: Compatible with `--read-only`; temporary scratch workspace is isolated in an anonymous `/tmp` volume.
+- **Full Capability Dropping**: Operates with `--cap-drop ALL`.
+- **Explicit Network Denial**: Operates under `--network none`.
+
+### Production Secure Invocation
+
+To extract archives with maximal OS-level and container isolation:
+
+```bash
+docker run --rm \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  -v "/host/path/to/input:/input:ro" \
+  -v "/host/path/to/output:/output:rw" \
+  ghcr.io/<owner>/unarc:0.2.0 \
+  extract /input/archive.rar --output /output
+```
+
+To test archive integrity without write access:
+
+```bash
+docker run --rm \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  -v "/host/path/to/input:/input:ro" \
+  ghcr.io/<owner>/unarc:0.2.0 \
+  test /input/archive.zip
+```
+
+---
+
+## Release Verification & Trust Anchors
+
+### 1. SHA-256 Checksum Verification
+```bash
+shasum -a 256 -c unarc-0.2.0-macos-arm64.tar.gz.sha256
+```
+
+### 2. Ed25519 Cryptographic Manifest Signature
+Every release manifest is cryptographically signed using Unarc's release key. The public key is permanently pinned in Unarc binary builds:
+- **Official Public Key (hex)**: `69ac4dbc8ef560b61acdad8772ac647cb009c07d49543489bc635aef69e89b4c`
+
+---
+
+## Update Behavior & Topology
+
+- **Native Binaries (`unarc update`)**:
+  - `unarc update --check`: Inquires configured release source for newer versions.
+  - `unarc update`: Downloads release manifest, verifies Ed25519 signature against the embedded trust anchor, verifies SHA-256 checksum and executable format (Mach-O / ELF), stages adjacent in target directory, and atomically replaces the binary via `rename(2)` with RAII rollback protection.
+  - Rejects updating through symlinks (`ErrorCode::UnsafeEntry`, exit code 21).
+- **Container Deployments**:
+  - Docker containers are immutable. In-place self-update (`unarc update`) is not supported and should not be used inside containers.
+  - Updates occur strictly by pulling new immutable version tags:
+    ```bash
+    docker pull ghcr.io/<owner>/unarc:0.2.1
+    ```
+- **GHCR Image Tagging & Retention**:
+  - **Immutable Release Tags**: `ghcr.io/<owner>/unarc:0.2.0` (primary integrity identity).
+  - **Convenience Tags**: `ghcr.io/<owner>/unarc:0.2` and `ghcr.io/<owner>/unarc:latest`.
+  - **Retention Policy**: GHCR automated retention prunes untagged and older image tags, retaining the latest 2 semantic release versions.
+
+---
+
+## Security Assumptions & Limitations
+
+- **macOS Native**: Uses native Seatbelt sandbox (`sandbox-exec`) where kernel confinement is available, strictly scoping file reads to resolved archive volumes, writes to output destination, and denying network access.
+- **Linux Container**: Enforces process group isolation, environment purging, `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG`, and relies on host container boundaries (`--network none`, `--read-only`, `--cap-drop ALL`, non-root user). Kernel-level LSM sandboxing is reported accurately as `DEGRADED` in containerized environments.
+- **Zero Silent Fallback**: If required security constraints fail, Unarc fails closed with structured exit codes.

@@ -7,7 +7,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Ensure Docker image is built
 if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
     echo "Building ${IMAGE_NAME} Docker image..."
-    docker build -t "${IMAGE_NAME}" "${DIR}"
+    docker build --target dev -t "${IMAGE_NAME}" "${DIR}"
 fi
 
 # Function to run cargo command in Docker
@@ -36,13 +36,19 @@ run_cargo() {
         if [ -d "${DIR}/tests" ]; then
             docker cp "${DIR}/tests" "${CONTAINER_ID}:/workspace/"
         fi
+        if [ -d "${DIR}/dist" ]; then
+            docker cp "${DIR}/dist" "${CONTAINER_ID}:/workspace/"
+        fi
 
         # Start container and stream output
         docker start -a "${CONTAINER_ID}"
         EXIT_CODE=$?
 
-        # Copy back generated/updated files (Cargo.lock, formatted src)
+        # Copy back generated/updated files (Cargo.lock, formatted src, dist artifacts)
         docker cp "${CONTAINER_ID}:/workspace/Cargo.lock" "${DIR}/" >/dev/null 2>&1 || true
+        if [ -d "${DIR}/dist" ]; then
+            docker cp "${CONTAINER_ID}:/workspace/dist/." "${DIR}/dist/" >/dev/null 2>&1 || true
+        fi
         if [ "${1:-}" = "fmt" ]; then
             docker cp "${CONTAINER_ID}:/workspace/src/." "${DIR}/src/" >/dev/null 2>&1 || true
             if [ -d "${DIR}/tests" ]; then

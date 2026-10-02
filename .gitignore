@@ -18,4 +18,5 @@ Cargo.lock.backup
 # Scratch & temporary files
 tmp/
 temp/
+dist/
 *.log

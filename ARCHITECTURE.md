@@ -303,3 +303,60 @@ Unarc formalizes a stable taxonomy of 16 structured error codes mapped to determ
   - `Engine Binary Integrity`: Checks actual disk SHA-256 of 7zz against expected hash.
   - `Release Identity & Manifest`: Verifies canonical manifest identity and architecture compatibility.
   - `Cryptographic Update Verifier`: Validates Ed25519 verification engine readiness and public key configuration.
+
+---
+
+## 6. Phase 7 Architectural Decisions: Hardened Docker Runtime, CI Automation, Native macOS Packaging & GHCR
+
+### Decision 1: Hardened Distroless Production Docker Runtime
+- **Multi-Stage Container Architecture**:
+  - `dev` stage: `rust:1.85.0-slim` pinned toolchain for hermetic development, clippy, and testing.
+  - `builder` stage: compiles stripped, optimized release binaries with `panic = "abort"`, `lto = true`, `opt-level = 3`.
+  - `runtime` stage: based strictly on `gcr.io/distroless/cc-debian12:nonroot`.
+- **Zero Attack Surface & Attack Tool Elimination**:
+  - Contains NO compilers (`gcc`, `rustc`), NO build utilities (`cargo`, `make`), NO dev tools (`git`, `curl`), and NO package managers (`apt`, `dpkg`).
+  - Contains NO shell interpreter: `/bin/sh` and `/bin/bash` are absent from the runtime image.
+  - Contains strictly the two runtime binaries: `/usr/local/bin/unarc` and `/opt/unarc/bin/7zz`, dynamically linked to minimal system `glibc` and `libstdc++`.
+
+### Decision 2: Principle of Least Privilege in Container Invocation
+- **Strict Non-Root Runtime User**:
+  - Executes as unprivileged user `nonroot:nonroot` (`UID:GID 65532:65532`).
+- **Read-Only Root Compatibility**:
+  - Designed to execute under `docker run --read-only`.
+  - An anonymous volume (`VOLUME ["/tmp"]`) provides isolated temporary scratch space with standard `1777` sticky permissions.
+- **Full Linux Capability Dropping**:
+  - Designed to operate with `--cap-drop ALL`, preventing privilege escalation.
+- **Explicit Network Denial**:
+  - Operates under `--network none`. Unarc extraction processes cannot establish outbound or inbound network connections.
+- **Asymmetric Filesystem Mounts**:
+  - Archive inputs mounted strictly read-only (`:ro`).
+  - Output destination directory mounted explicitly writable (`:rw`). Attempts to write to `/input` or root `/` fail immediately.
+
+### Decision 3: Automated Multi-Platform GitHub Actions CI/CD Pipeline
+- **Separation of Concerns**:
+  - `ci.yml`: Standard PR and branch CI running pinned format check, Clippy lints with warnings denied, unit/integration tests, and hardened Docker runtime verification.
+  - `release-macos.yml`: Builds and packages native Apple Silicon (`aarch64-apple-darwin`) release bundle with pinned 7zz and Ed25519 manifest signature.
+  - `release-linux.yml`: Matrix build for Linux `x86_64` and `aarch64` native bundles.
+  - `docker-publish.yml`: Multi-arch QEMU/Buildx compilation, verification via `scripts/verify-docker.sh`, and publication to GHCR with automated version pruning.
+  - `release.yml`: Coordinates cross-platform release builds, performs pre-publication artifact and signature verification, and creates GitHub Releases with immutable assets.
+- **Fail-Closed Enforcement**:
+  - Any failure in formatting, linting, tests, security probes, checksum checks, or cryptographic signature verification fails the pipeline immediately.
+
+### Decision 4: Standalone Self-Contained Apple Silicon Native Packaging
+- **Zero Host Prerequisites**:
+  - macOS release tarball (`unarc-<version>-macos-arm64.tar.gz`) bundles both `unarc` and authentic pinned `7zz` (v26.03, verified by SHA-256).
+  - Operates standalone: end users require no Homebrew, Python, Docker, or system-installed 7-Zip.
+  - Mach-O executable architecture verified as 64-bit arm64.
+
+### Decision 5: Separation of Update Topologies
+- **Native Host Executables**:
+  - Managed via `unarc update`. Atomically staged adjacent to target executable and replaced via `rename(2)` after Ed25519 signature and SHA-256 verification.
+- **Container Environments**:
+  - Docker containers are immutable. In-place binary self-updates are not applicable inside containers; updates are achieved exclusively by pulling new immutable semantic image tags from GHCR.
+
+### Decision 6: GHCR Image Tagging & Automated Retention
+- **Semantic Version Tags**:
+  - `ghcr.io/<owner>/unarc:<version>` serves as the immutable release identity.
+  - `latest` and major/minor tags (`0.2`) are provided exclusively as convenience pointers and never as integrity anchors.
+- **Automated Retention**:
+  - CI policy prunes untagged and older image tags, retaining the latest two semantic release versions to prevent unbounded registry bloat.

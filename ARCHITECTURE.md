@@ -256,4 +256,49 @@ Unarc formalizes a stable taxonomy of 16 structured error codes mapped to determ
   - **Decompression Throughput**: 190–770 MB/s streaming decompression.
   - **Benchmark Scope Distinction**: The automated benchmark suite validates bounded-memory behavior on representative sizes (up to 50MB); empirical 100GB+ extraction is not part of the current automated test run and is bounded only by underlying disk storage.
 
+---
 
+## 5. Phase 6 Architectural Decisions: Binary Integrity, Engine Verification & Cryptographic Self-Update
+
+### Decision 1: Canonical Release Integrity Manifest (`src/security/integrity.rs`)
+- **Structure**:
+  - `unarc_version`: Package version (`CARGO_PKG_VERSION`).
+  - `target_os`: Operating system identifier (`std::env::consts::OS`).
+  - `target_arch`: Target architecture (`std::env::consts::ARCH`).
+  - `bundled_7zz_version`: Pinned 7-Zip release version (`26.03`).
+  - `bundled_7zz_sha256`: Expected SHA-256 hash of the extracted `7zz` executable on disk.
+- **Fail-Closed Runtime Verification**:
+  - `verify_bundled_engine_integrity(path)` computes the actual SHA-256 hash of the bundled 7zz binary on disk and verifies it against the compile-time pinned hash.
+  - Verification is mandatory and runs upfront before any engine invocation in `extract_archive` and `test_archive`.
+  - Any mismatch immediately fails closed with `SecurityError::PolicyViolation` / `ErrorCode::SecurityPolicyViolation` (exit code `22`). Unarc never silently continues with a tampered engine.
+
+### Decision 2: Cryptographic Release Verification (Ed25519 & SHA-256)
+- **Zero Engine Dependency**: Verification is implemented using pure Rust (`ed25519-dalek` and `sha2`), completely independent of the archive extraction engine.
+- **Release Metadata Manifest (`ReleaseManifest`)**:
+  - Encodes release metadata: version, target OS, target architecture, bundled 7zz version, expected 7zz SHA-256, artifact download URL, and artifact SHA-256.
+  - Signed with an Ed25519 private key; verified using Unarc's official public key (`ReleaseSignatureVerifier`).
+  - Untrusted Source Defense: Content is never trusted simply because it originated from a specific URL or host. Verification requires valid cryptographic signature, architecture compatibility, and matching SHA-256 hash.
+
+### Decision 3: Explicit Self-Update & Transactional Atomic Rollback (`src/core/update.rs`)
+- **Strict User Invocation**:
+  - `unarc update`: Explicit user action only. No background daemons, cron jobs, background threads, or automatic polling.
+  - `--check`: Probes configured source for new versions without downloading or applying changes.
+  - `--source <url|path>`: Allows specifying custom release sources (e.g. for offline airgapped updates or test fixtures).
+- **Update Verification Pipeline**:
+  1. *Query*: Fetches `manifest.json` from the source.
+  2. *Cryptographic Signature Check*: Verifies Ed25519 signature over canonical manifest bytes.
+  3. *Architecture Compatibility Check*: Asserts `target_os == CURRENT_OS` and `target_arch == CURRENT_ARCH`.
+  4. *Atomic Staging*: Downloads the release artifact into an adjacent temporary staging file (`.unarc_staging_<pid>_<timestamp>.tmp`) in the same filesystem.
+  5. *Checksum Verification*: Computes SHA-256 on the staged file; asserts exact match with `artifact_sha256`.
+  6. *Executable Format Verification*: Checks binary magic bytes: Mach-O on macOS (`0xFEEDFACF`, etc.) and ELF on Linux (`0x7F 'E' 'L' 'F'`). Never executes an unverified binary.
+  7. *Permissions*: Applies POSIX `0755` executable permissions to the staged file.
+  8. *Atomic Replacement*: Invokes POSIX `std::fs::rename`, replacing the existing executable in a single atomic filesystem operation.
+- **Rollback Guarantee**:
+  - Backed by RAII `StagingGuard`: any failure before the final atomic rename leaves the existing binary completely untouched and cleans up the staging file.
+  - Bundled 7zz Engine Immutability: The bundled 7zz engine is never updated independently at runtime; engine updates may only arrive as part of a verified, signed new Unarc release.
+
+### Decision 4: Extended Doctor Diagnostics
+- `unarc doctor` probes expanded to verify:
+  - `Engine Binary Integrity`: Checks actual disk SHA-256 of 7zz against expected hash.
+  - `Release Identity & Manifest`: Verifies canonical manifest identity and architecture compatibility.
+  - `Cryptographic Update Verifier`: Validates Ed25519 verification engine readiness and public key configuration.

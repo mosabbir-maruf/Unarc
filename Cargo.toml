@@ -17,6 +17,8 @@ crossterm = "0.28"
 rpassword = "7.3"
 libc = "0.2"
 signal-hook = { version = "0.3", features = ["iterator"] }
+sha2 = "0.10"
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std"] }
 
 [lib]
 name = "unarc"

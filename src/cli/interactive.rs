@@ -44,7 +44,7 @@ pub const SUGGESTIONS: &[CommandSuggestion] = &[
     },
     CommandSuggestion {
         command: "/update",
-        description: "Engine updater (deferred to future phase)",
+        description: "Check or apply cryptographically verified self-update",
     },
     CommandSuggestion {
         command: "/config",
@@ -285,11 +285,31 @@ pub fn execute_interactive_command(
             Ok(())
         }
         "/update" | "update" => {
-            formatter.print_deferred_command(
-                "/update",
-                "Unarc utilizes build-time pinned engines. Dynamic runtime updating is deferred to a future phase.",
-            );
-            Ok(())
+            let manager = crate::core::update::UpdateManager::default();
+            println!("Checking for updates...");
+            match manager.check_for_update(None) {
+                Ok(check_res) => {
+                    formatter.print_update_check(&check_res);
+                    if check_res.update_available {
+                        print!("Proceed with download and verified installation? [y/N]: ");
+                        let _ = stdout().flush();
+                        let mut answer = String::new();
+                        let _ = stdin().read_line(&mut answer);
+                        if answer.trim().eq_ignore_ascii_case("y") {
+                            println!("Applying self-update...");
+                            match manager.apply_update(None, None) {
+                                Ok(apply_res) => formatter.print_update_apply(&apply_res),
+                                Err(e) => formatter.print_error(&e),
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    formatter.print_error(&e);
+                    Ok(())
+                }
+            }
         }
         "/config" | "config" => {
             formatter.print_deferred_command(

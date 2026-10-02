@@ -45,6 +45,21 @@ pub enum Commands {
 
     /// Run system diagnostics and security boundary verification.
     Doctor,
+
+    /// Check or apply cryptographically verified self-update.
+    Update(UpdateArgs),
+}
+
+/// Arguments for the `update` subcommand.
+#[derive(Debug, Args, Clone, PartialEq, Eq, Default)]
+pub struct UpdateArgs {
+    /// Check for available updates without applying changes.
+    #[arg(long)]
+    pub check: bool,
+
+    /// Custom update source repository URL or local file path.
+    #[arg(short, long, value_name = "SOURCE")]
+    pub source: Option<String>,
 }
 
 /// Arguments for the `extract` subcommand.

@@ -1905,3 +1905,375 @@ fn test_phase5_regression_no_process_hang_bounded_termination_time() {
     let _ = std::fs::remove_file(&enc_archive);
     let _ = std::fs::remove_dir_all(&out_dir);
 }
+
+// =========================================================================
+// Phase 6: Binary integrity, engine integrity, doctor, and explicit self-update
+// =========================================================================
+
+#[test]
+fn test_phase6_integrity_success() {
+    let app = Application::default();
+    let manifest = unarc::security::integrity::IntegrityManifest::current();
+    assert!(manifest.verify_current_identity().is_ok());
+
+    // When engine is available, engine integrity verification succeeds
+    if let Ok(hash) = app.verify_engine_integrity() {
+        assert_eq!(
+            hash.to_lowercase(),
+            app.expected_engine_sha256().to_lowercase()
+        );
+    }
+
+    let doc = app.doctor_check();
+    let integrity_probe = doc
+        .checks
+        .iter()
+        .find(|c| c.name == "Engine Binary Integrity");
+    assert!(integrity_probe.is_some());
+    let manifest_probe = doc
+        .checks
+        .iter()
+        .find(|c| c.name == "Release Identity & Manifest");
+    assert!(manifest_probe.is_some());
+    assert!(manifest_probe.unwrap().passed);
+}
+
+#[test]
+fn test_phase6_engine_tamper_detection() {
+    let temp_dir = std::env::temp_dir().join(format!("tamper_test_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let tampered_binary = temp_dir.join("tampered_7zz");
+    std::fs::write(&tampered_binary, b"tampered 7zz engine executable content").unwrap();
+
+    let old_env = std::env::var("UNARC_BUNDLED_7ZZ").ok();
+    std::env::set_var(
+        "UNARC_BUNDLED_7ZZ",
+        tampered_binary.to_string_lossy().as_ref(),
+    );
+
+    let app = Application::default();
+    let verify_res = app.verify_engine_integrity();
+    assert!(verify_res.is_err());
+    let err = verify_res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::SecurityPolicyViolation);
+    assert_eq!(err.exit_code(), 22);
+
+    // Extraction must fail closed with exit code 22
+    let dummy_archive = temp_dir.join("test.zip");
+    std::fs::write(&dummy_archive, b"PK\x05\x06dummy").unwrap();
+    let out_dir = temp_dir.join("out");
+
+    let extract_res = app.extract_archive(&dummy_archive, Some(&out_dir), None);
+    assert!(extract_res.is_err());
+    let ext_err = extract_res.unwrap_err();
+    assert_eq!(ext_err.code(), ErrorCode::SecurityPolicyViolation);
+    assert_eq!(ext_err.exit_code(), 22);
+
+    // Doctor must report failure on tampered engine
+    let doc = app.doctor_check();
+    let probe = doc
+        .checks
+        .iter()
+        .find(|c| c.name == "Engine Binary Integrity")
+        .unwrap();
+    assert!(!probe.passed);
+    assert!(!doc.healthy);
+
+    // Restore environment
+    match old_env {
+        Some(val) => std::env::set_var("UNARC_BUNDLED_7ZZ", val),
+        None => std::env::remove_var("UNARC_BUNDLED_7ZZ"),
+    }
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_manifest_mismatch_rejection() {
+    let mut manifest = unarc::security::integrity::IntegrityManifest::current();
+    manifest.unarc_version = "999.0.0".to_string();
+    let res = manifest.verify_current_identity();
+    assert!(res.is_err());
+    assert!(matches!(
+        res.unwrap_err(),
+        unarc::error::SecurityError::PolicyViolation { .. }
+    ));
+
+    let mut manifest2 = unarc::security::integrity::IntegrityManifest::current();
+    manifest2.bundled_7zz_sha256 =
+        "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    assert!(manifest2.verify_current_identity().is_err());
+}
+
+#[test]
+fn test_phase6_wrong_architecture_rejection() {
+    let mut manifest = unarc::security::integrity::ReleaseManifest {
+        version: "1.0.0".to_string(),
+        target_os: if std::env::consts::OS == "macos" {
+            "linux".to_string()
+        } else {
+            "macos".to_string()
+        },
+        target_arch: std::env::consts::ARCH.to_string(),
+        bundled_7zz_version: PINNED_7ZIP_VERSION.to_string(),
+        bundled_7zz_sha256: "hash".to_string(),
+        artifact_url: "unarc".to_string(),
+        artifact_sha256: "hash".to_string(),
+        signature: None,
+    };
+    assert!(manifest.verify_architecture_compatibility().is_err());
+
+    manifest.target_os = std::env::consts::OS.to_string();
+    manifest.target_arch = "sparc64".to_string();
+    assert!(manifest.verify_architecture_compatibility().is_err());
+}
+
+#[test]
+fn test_phase6_invalid_signature_rejection() {
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(
+        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
+    );
+    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::official();
+
+    let mut manifest = unarc::security::integrity::ReleaseManifest {
+        version: "0.5.0".to_string(),
+        target_os: std::env::consts::OS.to_string(),
+        target_arch: std::env::consts::ARCH.to_string(),
+        bundled_7zz_version: PINNED_7ZIP_VERSION.to_string(),
+        bundled_7zz_sha256: unarc::security::integrity::expected_engine_binary_sha256().to_string(),
+        artifact_url: "unarc".to_string(),
+        artifact_sha256: "aabbcc".to_string(),
+        signature: None,
+    };
+
+    manifest.sign(&signing_key);
+    assert!(manifest.verify_signature(&verifier).is_ok());
+
+    // Corrupted signature bytes
+    manifest.signature = Some(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            .to_string(),
+    );
+    assert!(manifest.verify_signature(&verifier).is_err());
+
+    // Tampered payload with valid signature for previous payload
+    manifest.version = "0.6.0".to_string();
+    assert!(manifest.verify_signature(&verifier).is_err());
+}
+
+#[test]
+fn test_phase6_invalid_checksum_rejection_and_staging_cleanup() {
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(
+        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
+    );
+    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::official();
+
+    let mut dummy_binary = vec![0u8; 2048];
+    #[cfg(target_os = "macos")]
+    dummy_binary[..4].copy_from_slice(&[0xCF, 0xFA, 0xED, 0xFE]);
+    #[cfg(target_os = "linux")]
+    dummy_binary[..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+
+    let mut manifest = unarc::security::integrity::ReleaseManifest {
+        version: "0.5.0".to_string(),
+        target_os: std::env::consts::OS.to_string(),
+        target_arch: std::env::consts::ARCH.to_string(),
+        bundled_7zz_version: PINNED_7ZIP_VERSION.to_string(),
+        bundled_7zz_sha256: unarc::security::integrity::expected_engine_binary_sha256().to_string(),
+        artifact_url: "unarc_bin".to_string(),
+        // Intentional wrong checksum
+        artifact_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+            .to_string(),
+        signature: None,
+    };
+    manifest.sign(&signing_key);
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+
+    let mut mock_transport = unarc::core::update::MockDownloadTransport::new();
+    mock_transport.register("https://update.test/manifest.json", manifest_bytes);
+    mock_transport.register("https://update.test/unarc_bin", dummy_binary);
+
+    let manager = unarc::core::update::UpdateManager::new(
+        mock_transport,
+        verifier,
+        Some("https://update.test".to_string()),
+    );
+
+    let temp_dir = std::env::temp_dir().join(format!("checksum_test_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let target_bin = temp_dir.join("current_unarc");
+    std::fs::write(&target_bin, b"original_binary_content").unwrap();
+
+    let apply_res = manager.apply_update(None, Some(&target_bin));
+    assert!(apply_res.is_err());
+    let err = apply_res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::SecurityPolicyViolation);
+    assert_eq!(err.exit_code(), 22);
+
+    // Rollback guarantee: original target binary remains untouched
+    let content = std::fs::read(&target_bin).unwrap();
+    assert_eq!(content, b"original_binary_content");
+
+    // Staging file must be cleaned up
+    let entries: Vec<_> = std::fs::read_dir(&temp_dir).unwrap().collect();
+    assert_eq!(entries.len(), 1); // Only target_bin remains
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_atomic_rollback_on_failure() {
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(
+        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
+    );
+    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::official();
+
+    // Bad executable format: plain text instead of Mach-O/ELF
+    let invalid_bin = b"this is not a valid executable binary file".repeat(50);
+    let bin_sha = unarc::security::integrity::compute_sha256_bytes(&invalid_bin);
+
+    let mut manifest = unarc::security::integrity::ReleaseManifest {
+        version: "0.5.0".to_string(),
+        target_os: std::env::consts::OS.to_string(),
+        target_arch: std::env::consts::ARCH.to_string(),
+        bundled_7zz_version: PINNED_7ZIP_VERSION.to_string(),
+        bundled_7zz_sha256: unarc::security::integrity::expected_engine_binary_sha256().to_string(),
+        artifact_url: "bad_bin".to_string(),
+        artifact_sha256: bin_sha,
+        signature: None,
+    };
+    manifest.sign(&signing_key);
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+
+    let mut mock_transport = unarc::core::update::MockDownloadTransport::new();
+    mock_transport.register("https://update.test/manifest.json", manifest_bytes);
+    mock_transport.register("https://update.test/bad_bin", invalid_bin);
+
+    let manager = unarc::core::update::UpdateManager::new(
+        mock_transport,
+        verifier,
+        Some("https://update.test".to_string()),
+    );
+
+    let temp_dir = std::env::temp_dir().join(format!("rollback_test_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let target_bin = temp_dir.join("current_unarc");
+    std::fs::write(&target_bin, b"keep_me_intact").unwrap();
+
+    let res = manager.apply_update(None, Some(&target_bin));
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::SecurityPolicyViolation);
+
+    // Rollback guarantee
+    assert_eq!(std::fs::read(&target_bin).unwrap(), b"keep_me_intact");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_local_test_fixture_update() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("local_fixture_update_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(
+        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
+    );
+    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::official();
+
+    // Valid mock executable
+    let mut dummy_binary = vec![0u8; 2048];
+    #[cfg(target_os = "macos")]
+    dummy_binary[..4].copy_from_slice(&[0xCF, 0xFA, 0xED, 0xFE]);
+    #[cfg(target_os = "linux")]
+    dummy_binary[..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+
+    let artifact_path = temp_dir.join("unarc_release_bin");
+    std::fs::write(&artifact_path, &dummy_binary).unwrap();
+    let bin_sha = unarc::security::integrity::compute_sha256(&artifact_path).unwrap();
+
+    let mut manifest = unarc::security::integrity::ReleaseManifest {
+        version: "0.8.0".to_string(),
+        target_os: std::env::consts::OS.to_string(),
+        target_arch: std::env::consts::ARCH.to_string(),
+        bundled_7zz_version: PINNED_7ZIP_VERSION.to_string(),
+        bundled_7zz_sha256: unarc::security::integrity::expected_engine_binary_sha256().to_string(),
+        artifact_url: "unarc_release_bin".to_string(),
+        artifact_sha256: bin_sha,
+        signature: None,
+    };
+    manifest.sign(&signing_key);
+
+    let manifest_path = temp_dir.join("manifest.json");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let target_bin = temp_dir.join("installed_unarc");
+    std::fs::write(&target_bin, b"old_unarc").unwrap();
+
+    // Use SystemCurlTransport with local file source
+    let manager = unarc::core::update::UpdateManager::new(
+        unarc::core::update::SystemCurlTransport,
+        verifier,
+        Some(temp_dir.to_string_lossy().to_string()),
+    );
+
+    let check = manager.check_for_update(None).unwrap();
+    assert_eq!(check.latest_version, "0.8.0");
+    assert!(check.update_available);
+
+    let apply = manager.apply_update(None, Some(&target_bin)).unwrap();
+    assert_eq!(apply.new_version, "0.8.0");
+    assert_eq!(apply.binary_path, target_bin);
+
+    // Verify replacement content
+    assert_eq!(std::fs::read(&target_bin).unwrap(), dummy_binary);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_cli_update_command() {
+    let temp_dir = std::env::temp_dir().join(format!("cli_update_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(
+        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
+    );
+
+    let mut manifest = unarc::security::integrity::ReleaseManifest {
+        version: "0.9.9".to_string(),
+        target_os: std::env::consts::OS.to_string(),
+        target_arch: std::env::consts::ARCH.to_string(),
+        bundled_7zz_version: PINNED_7ZIP_VERSION.to_string(),
+        bundled_7zz_sha256: unarc::security::integrity::expected_engine_binary_sha256().to_string(),
+        artifact_url: "unarc".to_string(),
+        artifact_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .to_string(),
+        signature: None,
+    };
+    manifest.sign(&signing_key);
+    let manifest_path = temp_dir.join("manifest.json");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    // CLI update --check with custom source
+    let cli = Cli {
+        json: true,
+        verbose: false,
+        quiet: false,
+        command: Some(Commands::Update(unarc::cli::args::UpdateArgs {
+            check: true,
+            source: Some(manifest_path.to_string_lossy().to_string()),
+        })),
+    };
+    assert!(run_with_cli(cli).is_ok());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

@@ -2,8 +2,7 @@
 
 use crate::archive::backend::{ArchiveBackend, ArchiveExtractResult, ArchiveTestResult};
 use crate::archive::bundled::{
-    resolve_bundled_engine, SevenZipBackend, EXPECTED_SHA256_LINUX_ARM64,
-    EXPECTED_SHA256_LINUX_X64, EXPECTED_SHA256_MACOS, PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION,
+    resolve_bundled_engine, SevenZipBackend, PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION,
 };
 use crate::archive::format::ArchiveFormat;
 use crate::archive::metadata::ArchiveMetadata;
@@ -126,6 +125,12 @@ pub struct EngineInfo {
     /// Resolved executable path on disk, if available.
     pub resolved_path: Option<PathBuf>,
 
+    /// Actual calculated SHA-256 hash of the resolved binary on disk.
+    pub actual_sha256: Option<String>,
+
+    /// Whether binary integrity check passed.
+    pub integrity_verified: bool,
+
     /// Whether the bundled engine is functional.
     pub is_available: bool,
 }
@@ -174,6 +179,9 @@ pub struct AppInfo {
     /// Bundled archive engine information.
     pub engine: EngineInfo,
 
+    /// Canonical release integrity manifest.
+    pub manifest: crate::security::integrity::IntegrityManifest,
+
     /// Active security policy configuration.
     pub policy: SecurityPolicy,
 }
@@ -216,28 +224,40 @@ impl Application {
         self.security_context.policy()
     }
 
-    /// Expected SHA-256 for the current host architecture.
+    /// Expected SHA-256 for the current host architecture bundled engine binary.
     #[must_use]
     pub fn expected_engine_sha256(&self) -> &'static str {
-        if self.platform_info.is_macos {
-            EXPECTED_SHA256_MACOS
-        } else if self.platform_info.arch == "aarch64" {
-            EXPECTED_SHA256_LINUX_ARM64
-        } else {
-            EXPECTED_SHA256_LINUX_X64
-        }
+        crate::security::integrity::expected_engine_binary_sha256()
     }
 
-    /// Returns engine status information.
+    /// Verifies the bundled engine binary integrity against the expected pinned SHA-256 hash.
+    pub fn verify_engine_integrity(&self) -> Result<String> {
+        let path = resolve_bundled_engine()?;
+        let hash = crate::security::integrity::verify_bundled_engine_integrity(&path)?;
+        Ok(hash)
+    }
+
+    /// Returns engine status information including verified binary hash.
     #[must_use]
     pub fn engine_info(&self) -> EngineInfo {
         let resolved = resolve_bundled_engine().ok();
         let is_available = resolved.is_some();
+        let expected = self.expected_engine_sha256().to_string();
+        let actual = resolved
+            .as_ref()
+            .and_then(|p| crate::security::integrity::compute_sha256(p).ok());
+        let integrity_verified = match (&actual, &expected) {
+            (Some(act), exp) => act.to_lowercase() == exp.to_lowercase(),
+            _ => false,
+        };
+
         EngineInfo {
             pinned_version: PINNED_7ZIP_VERSION.to_string(),
             release_url: PINNED_7ZIP_RELEASE_URL.to_string(),
-            expected_sha256: self.expected_engine_sha256().to_string(),
+            expected_sha256: expected,
             resolved_path: resolved,
+            actual_sha256: actual,
+            integrity_verified,
             is_available,
         }
     }
@@ -400,6 +420,62 @@ impl Application {
             },
         });
 
+        // Probe 10: Bundled Engine Binary SHA-256 Integrity
+        let engine_integrity_passed = engine.integrity_verified;
+        let integrity_msg = match (&engine.actual_sha256, &engine.resolved_path) {
+            (Some(actual), Some(p)) if engine.integrity_verified => {
+                format!(
+                    "Authentic pinned engine verified at '{}' (SHA-256: {})",
+                    p.display(),
+                    actual
+                )
+            }
+            (Some(actual), Some(p)) => {
+                format!(
+                    "Engine tamper detected at '{}'! Computed: {}, expected: {}",
+                    p.display(),
+                    actual,
+                    engine.expected_sha256
+                )
+            }
+            _ => "Engine binary hash verification skipped: binary not found".to_string(),
+        };
+        checks.push(DiagnosticCheck {
+            name: "Engine Binary Integrity".to_string(),
+            passed: engine_integrity_passed,
+            message: integrity_msg,
+        });
+
+        // Probe 11: Release Manifest Identity & Arch Compatibility
+        let manifest = crate::security::integrity::IntegrityManifest::current();
+        let manifest_passed = manifest.verify_current_identity().is_ok();
+        checks.push(DiagnosticCheck {
+            name: "Release Identity & Manifest".to_string(),
+            passed: manifest_passed,
+            message: if manifest_passed {
+                format!(
+                    "Canonical manifest verified: Unarc v{} ({}-{})",
+                    manifest.unarc_version, manifest.target_os, manifest.target_arch
+                )
+            } else {
+                "Canonical manifest identity mismatch".to_string()
+            },
+        });
+
+        // Probe 12: Cryptographic Update Verifier Readiness
+        let verifier = crate::security::integrity::ReleaseSignatureVerifier::official();
+        let pub_key_hex = verifier.public_key_hex();
+        let pub_key_preview = if pub_key_hex.len() >= 16 {
+            &pub_key_hex[..16]
+        } else {
+            &pub_key_hex
+        };
+        checks.push(DiagnosticCheck {
+            name: "Cryptographic Update Verifier".to_string(),
+            passed: true,
+            message: format!("Ed25519 signature engine active (trusted key: {pub_key_preview}...)"),
+        });
+
         let healthy = checks.iter().all(|c| c.passed);
 
         DoctorReport {
@@ -451,9 +527,12 @@ impl Application {
         // 1. Deterministic volume sequence resolution
         let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
 
-        // 2. Build sandbox policy restricting access strictly to resolved volumes (read-only)
-        let scratch = ScratchWorkspace::new()?;
+        // 2. Verify engine binary integrity upfront before execution
         let engine_path = resolve_bundled_engine()?;
+        crate::security::integrity::verify_bundled_engine_integrity(&engine_path)?;
+
+        // 3. Build sandbox policy restricting access strictly to resolved volumes (read-only)
+        let scratch = ScratchWorkspace::new()?;
         let sandbox_policy = ProcessSandboxPolicy::new(engine_path, scratch.path().to_path_buf())
             .with_inputs(volume_set.volumes.clone());
 
@@ -523,7 +602,11 @@ impl Application {
         // 1. Deterministic volume resolution (fails immediately on missing or invalid volumes)
         let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
 
-        // 2. Determine destination directory
+        // 2. Verify engine binary integrity upfront before execution
+        let engine_path = resolve_bundled_engine()?;
+        crate::security::integrity::verify_bundled_engine_integrity(&engine_path)?;
+
+        // 3. Determine destination directory
         let destination = if let Some(out) = output {
             out.to_path_buf()
         } else {
@@ -780,6 +863,7 @@ impl Application {
             version: env!("CARGO_PKG_VERSION").to_string(),
             platform: self.platform_info.clone(),
             engine: self.engine_info(),
+            manifest: crate::security::integrity::IntegrityManifest::current(),
             policy: self.security_context.policy().clone(),
         }
     }

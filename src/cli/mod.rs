@@ -134,5 +134,31 @@ pub fn run_with_cli_and_prompter<P: PasswordPrompter>(cli: Cli, prompter: &P) ->
             formatter.print_extract_result(&res);
             Ok(())
         }
+        Some(Commands::Update(args)) => {
+            let manager = crate::core::update::UpdateManager::default();
+            if args.check {
+                match manager.check_for_update(args.source.as_deref()) {
+                    Ok(check_res) => {
+                        formatter.print_update_check(&check_res);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        formatter.print_error(&e);
+                        Err(e)
+                    }
+                }
+            } else {
+                match manager.apply_update(args.source.as_deref(), None) {
+                    Ok(apply_res) => {
+                        formatter.print_update_apply(&apply_res);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        formatter.print_error(&e);
+                        Err(e)
+                    }
+                }
+            }
+        }
     }
 }

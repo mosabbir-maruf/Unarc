@@ -2,6 +2,7 @@
 
 use crate::archive::backend::{ArchiveExtractResult, ArchiveTestResult};
 use crate::core::app::{AppInfo, DoctorReport, EngineInfo};
+use crate::core::update::{UpdateApplyResult, UpdateCheckResult};
 use crate::error::UnarcError;
 use crate::security::SecurityPolicy;
 use serde_json::json;
@@ -224,6 +225,56 @@ impl OutputFormatter {
             println!("  Pinned Version:   v{}", engine.pinned_version);
             println!("  Source Release:   {}", engine.release_url);
             println!("  Policy:           Hermetic & pinned at build-time. Dynamic runtime updates are disabled.");
+        }
+    }
+
+    /// Formats and displays outcome of self-update check.
+    pub fn print_update_check(&self, result: &UpdateCheckResult) {
+        if self.json_mode {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(result).unwrap_or_default()
+            );
+        } else if !self.quiet {
+            let status_badge = if result.update_available {
+                self.style("UPDATE AVAILABLE", "\x1b[1;36m")
+            } else {
+                self.style("UP TO DATE", "\x1b[1;32m")
+            };
+            println!("Self-Update Check: [{status_badge}]");
+            println!("  Current Version:  v{}", result.current_version);
+            println!("  Latest Version:   v{}", result.latest_version);
+            println!(
+                "  Target Platform:  {}-{}",
+                result.manifest.target_os, result.manifest.target_arch
+            );
+            println!(
+                "  Bundled 7-Zip:    v{}",
+                result.manifest.bundled_7zz_version
+            );
+            println!("  Artifact SHA-256: {}", result.manifest.artifact_sha256);
+            if result.update_available {
+                println!("\nRun 'unarc update' to download, verify, and apply this update.");
+            }
+        }
+    }
+
+    /// Formats and displays outcome of applied self-update.
+    pub fn print_update_apply(&self, result: &UpdateApplyResult) {
+        if self.json_mode {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(result).unwrap_or_default()
+            );
+        } else if !self.quiet {
+            let status_badge = self.style("SUCCESS", "\x1b[1;32m");
+            println!("Self-Update Installed: [{status_badge}]");
+            println!("  Previous Version: v{}", result.previous_version);
+            println!("  New Version:      v{}", result.new_version);
+            println!("  Installed Binary: {}", result.binary_path.display());
+            println!(
+                "  Verification:     Ed25519 signature & SHA-256 checksum verified authentic."
+            );
         }
     }
 

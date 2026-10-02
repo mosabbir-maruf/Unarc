@@ -75,6 +75,12 @@ unarc --json info
 unarc doctor
 unarc --json doctor
 
+# Check for available signed updates
+unarc update --check
+
+# Apply cryptographically verified self-update
+unarc update
+
 # Display binary version
 unarc version
 ```
@@ -109,7 +115,7 @@ Available Interactive Commands:
 - `/test`: Tests archive integrity.
 - `/info`: Displays platform, engine, and security details.
 - `/doctor`: Runs diagnostic health checks.
-- `/update`: Inspects engine pinning and hermetic policy.
+- `/update`: Checks for and applies cryptographically verified self-update.
 - `/config`: Displays active security policy.
 - `/help`: Displays command reference.
 - `/exit`: Exits the interactive shell.

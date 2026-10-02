@@ -341,6 +341,26 @@ pub fn execute_interactive_command(
     }
 }
 
+/// Cleans raw terminal input paths by stripping surrounding single/double quotes,
+/// leading/trailing whitespace, and unescaping drag-and-drop artifacts.
+fn clean_terminal_path(raw: &str) -> String {
+    let mut s = raw.trim();
+    while (s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2)
+        || (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
+    {
+        s = &s[1..s.len() - 1];
+        s = s.trim();
+    }
+    let trimmed = s.trim_matches(|c| c == '\'' || c == '"').trim();
+    if !Path::new(trimmed).exists() && trimmed.contains("\\ ") {
+        let unescaped = trimmed.replace("\\ ", " ").replace("\\(", "(").replace("\\)", ")");
+        if Path::new(&unescaped).exists() {
+            return unescaped;
+        }
+    }
+    trimmed.to_string()
+}
+
 /// Prompts for archive path and executes integrity test.
 fn prompt_and_run_test(
     app: &Application,
@@ -350,7 +370,8 @@ fn prompt_and_run_test(
     let _ = stdout().flush();
     let mut line = String::new();
     stdin().read_line(&mut line)?;
-    let archive_path = PathBuf::from(line.trim().trim_matches('"'));
+    let clean = clean_terminal_path(&line);
+    let archive_path = PathBuf::from(clean);
 
     let res = crate::cli::run_test_with_prompt(
         app,
@@ -370,17 +391,18 @@ fn prompt_and_run_extract(
     let _ = stdout().flush();
     let mut archive_line = String::new();
     stdin().read_line(&mut archive_line)?;
-    let archive_path = PathBuf::from(archive_line.trim().trim_matches('"'));
+    let clean_archive = clean_terminal_path(&archive_line);
+    let archive_path = PathBuf::from(clean_archive);
 
     print!("Enter destination directory (leave empty for default): ");
     let _ = stdout().flush();
     let mut dest_line = String::new();
     stdin().read_line(&mut dest_line)?;
-    let dest_trimmed = dest_line.trim().trim_matches('"');
-    let dest_opt: Option<&Path> = if dest_trimmed.is_empty() {
+    let clean_dest = clean_terminal_path(&dest_line);
+    let dest_opt: Option<&Path> = if clean_dest.is_empty() {
         None
     } else {
-        Some(Path::new(dest_trimmed))
+        Some(Path::new(&clean_dest))
     };
 
     let res = crate::cli::run_extract_with_prompt(
@@ -396,6 +418,26 @@ fn prompt_and_run_extract(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_clean_terminal_path() {
+        assert_eq!(
+            clean_terminal_path("'/Users/foo/My Archive.rar'"),
+            "/Users/foo/My Archive.rar"
+        );
+        assert_eq!(
+            clean_terminal_path("\"/Users/foo/My Archive.rar\""),
+            "/Users/foo/My Archive.rar"
+        );
+        assert_eq!(
+            clean_terminal_path("  '/Volumes/PS5/untitled folder'  "),
+            "/Volumes/PS5/untitled folder"
+        );
+        assert_eq!(
+            clean_terminal_path("/Users/plain/path.zip"),
+            "/Users/plain/path.zip"
+        );
+    }
 
     #[test]
     fn test_filter_suggestions() {

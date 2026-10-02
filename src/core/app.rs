@@ -7,6 +7,7 @@ use crate::archive::bundled::{
 };
 use crate::archive::format::ArchiveFormat;
 use crate::archive::metadata::ArchiveMetadata;
+use crate::archive::volume::VolumeResolver;
 use crate::error::{ArchiveError, Result};
 use crate::platform::PlatformInfo;
 use crate::security::{SecurityContext, SecurityPolicy};
@@ -247,7 +248,14 @@ impl Application {
             .into());
         }
 
-        self.backend.test(path, password).map_err(Into::into)
+        // 1. Deterministic volume sequence resolution
+        let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
+
+        // 2. Run integrity check on the primary volume
+        let mut res = self.backend.test(&volume_set.primary_volume, password)?;
+        res.path = path.to_path_buf();
+        res.format = volume_set.format;
+        Ok(res)
     }
 
     /// Securely extracts an archive to a specified or default destination.
@@ -264,21 +272,123 @@ impl Application {
             .into());
         }
 
-        // Determine destination directory
+        // 1. Deterministic volume resolution (fails immediately on missing or invalid volumes)
+        let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
+
+        // 2. Determine destination directory
         let destination = if let Some(out) = output {
             out.to_path_buf()
         } else {
-            // Default: folder named after archive stem in current working directory
-            let stem = path
-                .file_stem()
-                .unwrap_or_else(|| std::ffi::OsStr::new("extracted"));
-            std::env::current_dir()?.join(stem)
+            // Default stem directory in current working directory
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "extracted".to_string());
+
+            let clean_stem = if let Some((st, _, _)) =
+                crate::archive::volume::parse_modern_part_filename(&file_name)
+            {
+                st
+            } else if let Some((st, _)) =
+                crate::archive::volume::parse_legacy_part_filename(&file_name)
+            {
+                st
+            } else {
+                path.file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "extracted".to_string())
+            };
+            std::env::current_dir()?.join(clean_stem)
         };
 
-        // Extract through bundled engine backend
-        self.backend
-            .extract(path, &destination, password)
-            .map_err(Into::into)
+        // 3. Pre-extract security inspection:
+        // List entries in the archive to detect path traversal, absolute paths, or unauthorized symlinks upfront
+        if let Ok(entries) = self
+            .backend
+            .list_entries(&volume_set.primary_volume, password)
+        {
+            for entry in entries {
+                self.security_context
+                    .policy()
+                    .validate_entry_path(&entry.path)?;
+
+                if entry.is_symlink && !self.security_context.policy().allow_symlinks {
+                    return Err(crate::error::SecurityError::InsecureSymlink {
+                        target: entry.path.to_string_lossy().to_string(),
+                    }
+                    .into());
+                }
+            }
+        }
+
+        // 4. Extract through bundled engine backend
+        let mut result =
+            self.backend
+                .extract(&volume_set.primary_volume, &destination, password)?;
+        result.archive_path = path.to_path_buf();
+        result.format = volume_set.format;
+
+        // 5. Post-extraction safety verification: verify boundary containment
+        self.verify_extracted_destination(&destination, &mut result)?;
+
+        Ok(result)
+    }
+
+    /// Verifies that all extracted files remain safely contained within the destination boundary.
+    fn verify_extracted_destination(
+        &self,
+        destination: &Path,
+        result: &mut ArchiveExtractResult,
+    ) -> Result<()> {
+        let dest_canonical = destination
+            .canonicalize()
+            .map_err(crate::error::UnarcError::Io)?;
+
+        let mut entry_count = 0usize;
+        let mut total_bytes = 0u64;
+
+        let mut stack = vec![dest_canonical.clone()];
+        while let Some(current_dir) = stack.pop() {
+            let read_dir = std::fs::read_dir(&current_dir)?;
+            for entry_res in read_dir {
+                let entry = entry_res?;
+                let path = entry.path();
+                let symlink_meta = std::fs::symlink_metadata(&path)?;
+
+                // Reject any created symlinks if policy forbids symlinks
+                if symlink_meta.file_type().is_symlink()
+                    && !self.security_context.policy().allow_symlinks
+                {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(crate::error::SecurityError::InsecureSymlink {
+                        target: path.to_string_lossy().to_string(),
+                    }
+                    .into());
+                }
+
+                // Check that canonical path stays within destination
+                if let Ok(canon) = path.canonicalize() {
+                    if !canon.starts_with(&dest_canonical) {
+                        return Err(crate::error::SecurityError::BoundaryEscaped {
+                            path: path.to_string_lossy().to_string(),
+                        }
+                        .into());
+                    }
+                }
+
+                if symlink_meta.is_dir() {
+                    stack.push(path);
+                } else if symlink_meta.is_file() {
+                    entry_count += 1;
+                    total_bytes += symlink_meta.len();
+                }
+            }
+        }
+
+        result.entries_extracted = Some(entry_count);
+        result.total_bytes_extracted = Some(total_bytes);
+
+        Ok(())
     }
 
     /// Inspects an archive on the filesystem, detecting format and extracting file metadata.

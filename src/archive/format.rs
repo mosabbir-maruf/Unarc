@@ -21,8 +21,10 @@ pub enum ArchiveFormat {
     TarBz2,
     /// XZ-compressed Tape Archive (.tar.xz, .txz)
     TarXz,
-    /// RAR archive (.rar)
+    /// RAR archive (.rar, RAR 4.x and earlier)
     Rar,
+    /// RAR5 archive (.rar, RAR 5.x)
+    Rar5,
 }
 
 impl fmt::Display for ArchiveFormat {
@@ -35,11 +37,18 @@ impl fmt::Display for ArchiveFormat {
             Self::TarBz2 => write!(f, "TAR.BZ2"),
             Self::TarXz => write!(f, "TAR.XZ"),
             Self::Rar => write!(f, "RAR"),
+            Self::Rar5 => write!(f, "RAR5"),
         }
     }
 }
 
 impl ArchiveFormat {
+    /// Returns true if the format is RAR or RAR5.
+    #[must_use]
+    pub fn is_rar(&self) -> bool {
+        matches!(self, Self::Rar | Self::Rar5)
+    }
+
     /// Detects the archive format from file extension.
     #[must_use]
     pub fn from_extension(path: &Path) -> Option<Self> {
@@ -63,7 +72,16 @@ impl ArchiveFormat {
             "7z" => Some(Self::SevenZip),
             "tar" => Some(Self::Tar),
             "rar" => Some(Self::Rar),
-            _ => None,
+            _ => {
+                // Legacy multipart RAR volume extensions: .r00.. .r99, .s00.. .s99
+                if (ext.starts_with('r') || ext.starts_with('s')) && ext.len() == 3 {
+                    let digits = &ext[1..];
+                    if digits.chars().all(|c| c.is_ascii_digit()) {
+                        return Some(Self::Rar);
+                    }
+                }
+                None
+            }
         }
     }
 
@@ -82,7 +100,17 @@ impl ArchiveFormat {
             return Some(Self::Zip);
         }
 
-        // Check RAR magic: Rar!\x1A\x07\x00 (v4) or Rar!\x1A\x07\x01\x00 (v5)
+        // Check RAR5 magic: Rar!\x1A\x07\x01\x00 (v5)
+        if header.len() >= 8 && header.starts_with(b"Rar!\x1A\x07\x01\x00") {
+            return Some(Self::Rar5);
+        }
+
+        // Check RAR4 magic: Rar!\x1A\x07\x00 (v4)
+        if header.len() >= 7 && header.starts_with(b"Rar!\x1A\x07\x00") {
+            return Some(Self::Rar);
+        }
+
+        // Check general RAR magic prefix
         if header.len() >= 7 && header.starts_with(b"Rar!\x1A\x07") {
             return Some(Self::Rar);
         }
@@ -167,6 +195,18 @@ mod tests {
             ArchiveFormat::from_extension(Path::new("legacy.rar")),
             Some(ArchiveFormat::Rar)
         );
+        assert_eq!(
+            ArchiveFormat::from_extension(Path::new("legacy.r00")),
+            Some(ArchiveFormat::Rar)
+        );
+        assert_eq!(
+            ArchiveFormat::from_extension(Path::new("legacy.r01")),
+            Some(ArchiveFormat::Rar)
+        );
+        assert_eq!(
+            ArchiveFormat::from_extension(Path::new("movie.part1.rar")),
+            Some(ArchiveFormat::Rar)
+        );
         assert_eq!(ArchiveFormat::from_extension(Path::new("plain.txt")), None);
     }
 
@@ -197,6 +237,10 @@ mod tests {
             Some(ArchiveFormat::Rar)
         );
         assert_eq!(
+            ArchiveFormat::from_magic_bytes(b"Rar!\x1A\x07\x01\x00data"),
+            Some(ArchiveFormat::Rar5)
+        );
+        assert_eq!(
             ArchiveFormat::from_magic_bytes(b"unknown bytes header"),
             None
         );
@@ -207,5 +251,10 @@ mod tests {
         assert_eq!(ArchiveFormat::Zip.to_string(), "ZIP");
         assert_eq!(ArchiveFormat::SevenZip.to_string(), "7-Zip");
         assert_eq!(ArchiveFormat::TarGz.to_string(), "TAR.GZ");
+        assert_eq!(ArchiveFormat::Rar.to_string(), "RAR");
+        assert_eq!(ArchiveFormat::Rar5.to_string(), "RAR5");
+        assert!(ArchiveFormat::Rar.is_rar());
+        assert!(ArchiveFormat::Rar5.is_rar());
+        assert!(!ArchiveFormat::Zip.is_rar());
     }
 }

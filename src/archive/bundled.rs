@@ -35,6 +35,7 @@ static SUPPORTED_FORMATS: &[ArchiveFormat] = &[
     ArchiveFormat::TarBz2,
     ArchiveFormat::TarXz,
     ArchiveFormat::Rar,
+    ArchiveFormat::Rar5,
 ];
 
 /// Locates the bundled 7zz executable adhering strictly to hermetic bundling rules.
@@ -224,12 +225,22 @@ impl ArchiveBackend for SevenZipBackend {
         let mut cur_size = 0u64;
         let mut cur_packed: Option<u64> = None;
         let mut cur_is_dir = false;
+        let mut in_entries_section = false;
 
         for line in stdout.lines() {
+            if line.starts_with("----------") || line.starts_with("---") {
+                in_entries_section = true;
+                continue;
+            }
+
+            if !in_entries_section {
+                continue;
+            }
+
             if let Some(stripped) = line.strip_prefix("Path = ") {
                 let p = PathBuf::from(stripped.trim());
-                if cur_path.is_some() && p != path {
-                    if let Some(last_p) = cur_path.take() {
+                if let Some(last_p) = cur_path.take() {
+                    if last_p != path {
                         entries.push(ArchiveEntry {
                             path: last_p,
                             uncompressed_size: cur_size,
@@ -298,6 +309,17 @@ impl ArchiveBackend for SevenZipBackend {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let combined = format!("{stdout}\n{stderr}");
 
+        if combined.contains("Cannot find volume")
+            || combined.contains("Can not find volume")
+            || combined.contains("Missing volume")
+            || combined.contains("Cannot open volume")
+        {
+            return Err(ArchiveError::MissingVolume {
+                expected: "next volume".to_string(),
+                details: "Engine reported missing volume during integrity check".to_string(),
+            });
+        }
+
         if combined.contains("Wrong password")
             || combined.contains("Can not open encrypted archive")
             || combined.contains("Data Error in encrypted file")
@@ -358,6 +380,8 @@ impl ArchiveBackend for SevenZipBackend {
             "x".to_string(),
             format!("-o{}", destination.display()),
             "-y".to_string(),
+            "-snl-".to_string(), // Disable symbolic link extraction for security
+            "-snh-".to_string(), // Disable hard link extraction for security
             "-bso1".to_string(),
             "-bse2".to_string(),
         ];
@@ -374,6 +398,17 @@ impl ArchiveBackend for SevenZipBackend {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let combined = format!("{stdout}\n{stderr}");
+
+        if combined.contains("Cannot find volume")
+            || combined.contains("Can not find volume")
+            || combined.contains("Missing volume")
+            || combined.contains("Cannot open volume")
+        {
+            return Err(ArchiveError::MissingVolume {
+                expected: "next volume".to_string(),
+                details: "Engine reported missing volume during extraction".to_string(),
+            });
+        }
 
         if combined.contains("Wrong password")
             || combined.contains("Can not open encrypted archive")

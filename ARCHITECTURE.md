@@ -77,7 +77,7 @@ Unarc preserves strict unidirectional dependencies, completely isolating present
 
 ---
 
-## 2. Phase 2 Architectural Decisions
+## 2. Phase 2 & Phase 3 Architectural Decisions
 
 ### Decision 1: Bundled & Pinned 7-Zip Engine (v26.03)
 - **Version**: `26.03` (official Igor Pavlov release)
@@ -91,14 +91,40 @@ Unarc preserves strict unidirectional dependencies, completely isolating present
   - Zero runtime network requests are made.
   - No system-installed or Homebrew binaries are ever called.
 
-### Decision 2: Interactive Password Prompting
-- Encryption passwords are never accepted via command-line arguments to prevent exposing sensitive secrets in shell history or process tables (`ps aux`).
-- When an archive requires a password, Unarc prompts the user interactively (suppressing terminal echo via `rpassword`).
+### Decision 2: Deterministic Multipart Volume Resolution
+- **Resolution Scope**:
+  - Starts strictly from the user-selected archive path.
+  - Scanned strictly within the immediate parent directory (`selected_path.parent()`).
+  - **Zero recursive scanning**: never scans subdirectories, user home directories, or Downloads.
+- **Naming Conventions Supported**:
+  - Modern multipart: `<Stem>.part<N>.rar` (detects padding width, resolves parts 1 through N).
+  - Legacy multipart: `<Stem>.rar` (part 1), `<Stem>.r00` (part 2), `<Stem>.r01` (part 3), etc.
+  - Split 7-Zip: `<Stem>.7z.001`, `<Stem>.7z.002`, ...
+- **Sequence Integrity & Gap Detection**:
+  - Starting from any volume (e.g. `Movie.part2.rar`) resolves the full sequence starting from part 1.
+  - If any volume in the sequence `1..N` is missing: immediately fails with a structured `MISSING_VOLUME` error detailing the missing file.
+  - If any volume is not a regular file, is a forbidden symlink, or has an invalid/corrupted archive signature: immediately fails with `INVALID_VOLUME`.
+  - Checks archive headers (MAIN_HEAD and ENDARC_HEAD in RAR4/RAR5) to detect if additional subsequent volumes are expected.
+  - Isolates unrelated sibling archives (e.g. `Movie2.part1.rar` vs `Movie.part1.rar`).
+  - Read-only guarantees: input volumes are never renamed, deleted, moved, or altered.
 
-### Decision 3: Unified Execution Path
-- Direct CLI mode and interactive mode share the exact same underlying logic in `Application`.
-- Subcommands like `inspect` and `validate` are retained internally as foundational building blocks without exposing redundant public CLI commands.
+### Decision 3: Production-Grade Safe Streaming Extraction
+- **Streaming Execution**:
+  - Archive data is streamed directly to disk via the pinned engine; no archives or member files are buffered into memory.
+  - No artificial archive or extraction file-size limits: supports legitimate 100GB+ archives subject only to filesystem capacity.
+- **Multi-Stage Output Safety**:
+  1. *Pre-extraction validation*: Lists member entry paths and verifies every entry against `SecurityPolicy::validate_entry_path`. Any path traversal (`../`) or absolute path (`/`) is rejected before extraction begins.
+  2. *Hardened extraction flags*: Engine is invoked with `-snl-` (disable symbolic link extraction) and `-snh-` (disable hard link extraction).
+  3. *Post-extraction containment check*: Walks destination directory to verify canonical paths of all created entries remain bounded inside the target destination, ensuring zero leakage outside the selected root.
+- **Privacy & Hygiene**:
+  - No persistent extraction logs, staging caches, or history databases are created.
 
-### Decision 4: Non-TTY and Color Handling
+### Decision 4: Interactive Password Prompting & Presentation Isolation
+- Passwords are never accepted via CLI flags.
+- Prompts interactively using masked terminal input (`rpassword`).
+- Output formatter respects `NO_COLOR`, `--quiet`, `--verbose`, and structured `--json` modes.
+
+
+### Decision 5: Non-TTY and Color Handling
 - If `NO_COLOR` is present in the environment, ANSI escape sequences are completely suppressed.
 - If standard input is non-interactive (e.g. piped or redirected), Unarc automatically falls back to line-by-line streaming without attempting raw terminal mode manipulation.

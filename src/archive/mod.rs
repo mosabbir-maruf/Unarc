@@ -4,6 +4,7 @@ pub mod backend;
 pub mod bundled;
 pub mod format;
 pub mod metadata;
+pub mod volume;
 
 pub use backend::{ArchiveBackend, ArchiveExtractResult, ArchiveTestResult};
 pub use bundled::{
@@ -12,3 +13,4 @@ pub use bundled::{
 };
 pub use format::ArchiveFormat;
 pub use metadata::{ArchiveEntry, ArchiveMetadata};
+pub use volume::{VolumeResolver, VolumeSet};

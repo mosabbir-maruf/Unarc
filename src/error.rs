@@ -97,6 +97,14 @@ pub enum ArchiveError {
     /// Archive backend operation is not yet available or failed.
     #[error("Backend error ({backend}): {message}")]
     BackendFailure { backend: String, message: String },
+
+    /// A required volume for a multipart archive is missing.
+    #[error("MISSING_VOLUME: required volume '{expected}' not found ({details})")]
+    MissingVolume { expected: String, details: String },
+
+    /// An archive volume is invalid, mismatched, or corrupted.
+    #[error("INVALID_VOLUME: volume '{path}' is invalid ({reason})")]
+    InvalidVolume { path: String, reason: String },
 }
 
 /// Platform capability and environment errors.
@@ -182,6 +190,24 @@ mod tests {
         assert_eq!(
             pass_err.to_string(),
             "Password required for encrypted archive: data.zip"
+        );
+
+        let missing_vol = ArchiveError::MissingVolume {
+            expected: "archive.part2.rar".into(),
+            details: "gap detected".into(),
+        };
+        assert_eq!(
+            missing_vol.to_string(),
+            "MISSING_VOLUME: required volume 'archive.part2.rar' not found (gap detected)"
+        );
+
+        let invalid_vol = ArchiveError::InvalidVolume {
+            path: "archive.part1.rar".into(),
+            reason: "corrupted header".into(),
+        };
+        assert_eq!(
+            invalid_vol.to_string(),
+            "INVALID_VOLUME: volume 'archive.part1.rar' is invalid (corrupted header)"
         );
     }
 }

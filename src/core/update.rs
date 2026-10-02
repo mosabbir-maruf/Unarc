@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn test_mock_update_flow() {
         let signing_key = SigningKey::from_bytes(&OFFICIAL_RELEASE_SIGNING_SEED);
-        let verifier = ReleaseSignatureVerifier::official();
+        let verifier = ReleaseSignatureVerifier::from_verifying_key(signing_key.verifying_key());
 
         // Create dummy valid executable binary for current OS
         let mut dummy_binary = vec![0u8; 2048];

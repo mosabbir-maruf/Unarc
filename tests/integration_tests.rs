@@ -2032,7 +2032,9 @@ fn test_phase6_invalid_signature_rejection() {
     let signing_key = ed25519_dalek::SigningKey::from_bytes(
         &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
     );
-    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::official();
+    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::from_verifying_key(
+        signing_key.verifying_key(),
+    );
 
     let mut manifest = unarc::security::integrity::ReleaseManifest {
         version: "0.5.0".to_string(),
@@ -2065,7 +2067,9 @@ fn test_phase6_invalid_checksum_rejection_and_staging_cleanup() {
     let signing_key = ed25519_dalek::SigningKey::from_bytes(
         &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
     );
-    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::official();
+    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::from_verifying_key(
+        signing_key.verifying_key(),
+    );
 
     let mut dummy_binary = vec![0u8; 2048];
     #[cfg(target_os = "macos")]
@@ -2125,7 +2129,9 @@ fn test_phase6_atomic_rollback_on_failure() {
     let signing_key = ed25519_dalek::SigningKey::from_bytes(
         &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
     );
-    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::official();
+    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::from_verifying_key(
+        signing_key.verifying_key(),
+    );
 
     // Bad executable format: plain text instead of Mach-O/ELF
     let invalid_bin = b"this is not a valid executable binary file".repeat(50);
@@ -2179,7 +2185,9 @@ fn test_phase6_local_test_fixture_update() {
     let signing_key = ed25519_dalek::SigningKey::from_bytes(
         &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
     );
-    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::official();
+    let verifier = unarc::security::integrity::ReleaseSignatureVerifier::from_verifying_key(
+        signing_key.verifying_key(),
+    );
 
     // Valid mock executable
     let mut dummy_binary = vec![0u8; 2048];
@@ -2273,7 +2281,12 @@ fn test_phase6_cli_update_command() {
             source: Some(manifest_path.to_string_lossy().to_string()),
         })),
     };
-    assert!(run_with_cli(cli).is_ok());
+    // CLI update --check with unauthenticated manifest must fail closed (exit code 22 / SecurityPolicyViolation)
+    let res = run_with_cli(cli);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::SecurityPolicyViolation);
+    assert_eq!(err.exit_code(), 22);
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

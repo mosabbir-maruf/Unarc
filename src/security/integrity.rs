@@ -23,7 +23,7 @@ pub const EXPECTED_ENGINE_BINARY_SHA256_LINUX_X64: &str =
 
 /// Official embedded Ed25519 public key (hex) for authenticating release manifests.
 pub const OFFICIAL_RELEASE_PUBLIC_KEY_HEX: &str =
-    "69ac4dbc8ef560b61acdad8772ac647cb009c07d49543489bc635aef69e89b4c";
+    "90cd97dbf43425cb694d386cb89f2e04fa252fafa6bffddddfc2f3fc962a94ee";
 
 /// Test signing seed used exclusively by integration test fixtures.
 /// Production release signing keys are injected exclusively via CI secrets.
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn test_ed25519_sign_and_verify() {
         let signing_key = SigningKey::from_bytes(&OFFICIAL_RELEASE_SIGNING_SEED);
-        let verifier = ReleaseSignatureVerifier::official();
+        let verifier = ReleaseSignatureVerifier::from_verifying_key(signing_key.verifying_key());
 
         let mut manifest = ReleaseManifest {
             version: "0.3.0".to_string(),

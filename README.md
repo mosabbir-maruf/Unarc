@@ -264,7 +264,7 @@ shasum -a 256 -c unarc-0.2.0-macos-arm64.tar.gz.sha256
 
 ### 2. Ed25519 Cryptographic Manifest Signature
 Every release manifest is cryptographically signed using Unarc's release key. The public key is permanently pinned in Unarc binary builds:
-- **Official Public Key (hex)**: `69ac4dbc8ef560b61acdad8772ac647cb009c07d49543489bc635aef69e89b4c`
+- **Official Public Key (hex)**: `90cd97dbf43425cb694d386cb89f2e04fa252fafa6bffddddfc2f3fc962a94ee`
 
 ---
 

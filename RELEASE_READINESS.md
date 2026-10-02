@@ -39,7 +39,7 @@ This document tracks the final production release verification and readiness sta
   - Containerized secret scanning (`gitleaks`).
 - **Owner-Only Final Deployment Steps (Not Automatically Executed)**:
   - Configure `RELEASE_SIGNING_KEY` secret in GitHub repository settings.
-  - Replace `<COPYRIGHT HOLDER>` in `LICENSE` with legal owner identity.
-  - Replace `<SECURITY_EMAIL_PLACEHOLDER>` in `SECURITY.md` with designated security reporting contact address.
+  - Legal owner identity configured in `LICENSE` (`Mosabbir Maruf`).
+  - Security policy configured in `SECURITY.md` (GitHub Private Vulnerability Reporting).
   - Push release tag (`v0.2.0`) to trigger GitHub Actions release pipeline.
   - Review and publish official GitHub Release and GHCR container package.

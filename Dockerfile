@@ -55,6 +55,11 @@ RUN cargo build --release
 # ==============================================================================
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
+# OpenContainers image metadata
+LABEL org.opencontainers.image.source="https://github.com/mosabbir-maruf/Unarc"
+LABEL org.opencontainers.image.description="Ultra-minimal, hardened container image for Unarc"
+LABEL org.opencontainers.image.licenses="MIT"
+
 # Copy authentic pinned 7zz engine
 COPY --from=dev --chown=65532:65532 /opt/unarc/bin/7zz /opt/unarc/bin/7zz
 

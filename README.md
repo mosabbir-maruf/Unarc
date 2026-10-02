@@ -214,7 +214,7 @@ unarc doctor
 
 ## Hardened Docker Runtime (Production Linux Container)
 
-Unarc is distributed as an ultra-minimal, hardened container image on GitHub Container Registry (GHCR): `ghcr.io/<owner>/unarc:<version>`.
+Unarc is distributed as an ultra-minimal, hardened container image on GitHub Container Registry (GHCR): `ghcr.io/mosabbir-maruf/unarc:<version>`.
 
 ### Container Hardening Specifications
 
@@ -226,32 +226,51 @@ Unarc is distributed as an ultra-minimal, hardened container image on GitHub Con
 - **Full Capability Dropping**: Operates with `--cap-drop ALL`.
 - **Explicit Network Denial**: Operates under `--network none`.
 
-### Production Secure Invocation
+### Docker Usage
 
-To extract archives with maximal OS-level and container isolation:
+#### 1. Pull the Image
+```bash
+docker pull ghcr.io/mosabbir-maruf/unarc:latest
+```
 
+#### 2. Verify
+```bash
+docker run --rm ghcr.io/mosabbir-maruf/unarc:latest version
+```
+
+#### 3. Test an Archive (Hardened Invocation)
+Test archive integrity without write access under complete network, capability, and filesystem isolation:
 ```bash
 docker run --rm \
   --network none \
   --read-only \
   --cap-drop ALL \
-  -v "/host/path/to/input:/input:ro" \
-  -v "/host/path/to/output:/output:rw" \
-  ghcr.io/<owner>/unarc:0.2.0 \
+  -v "/path/to/archive/dir:/input:ro" \
+  ghcr.io/mosabbir-maruf/unarc:0.2.0 \
+  test /input/archive.zip
+```
+
+#### 4. Extract an Archive
+Extract an archive securely with read-only archive input, isolated output root, and explicit `--output /output`:
+```bash
+docker run --rm \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  -v "/path/to/archive/dir:/input:ro" \
+  -v "/path/to/output/dir:/output:rw" \
+  ghcr.io/mosabbir-maruf/unarc:0.2.0 \
   extract /input/archive.rar --output /output
 ```
 
-To test archive integrity without write access:
-
+#### 5. Recommended Versioned Image & Tagging
+For production and CI/CD pipelines, use the immutable versioned image:
 ```bash
-docker run --rm \
-  --network none \
-  --read-only \
-  --cap-drop ALL \
-  -v "/host/path/to/input:/input:ro" \
-  ghcr.io/<owner>/unarc:0.2.0 \
-  test /input/archive.zip
+ghcr.io/mosabbir-maruf/unarc:0.2.0
 ```
+
+> [!NOTE]
+> `latest` is a convenience tag for ad-hoc usage. Versioned tags (e.g., `0.2.0`) should always be preferred for reproducible deployments.
 
 ---
 
@@ -278,11 +297,11 @@ Every release manifest is cryptographically signed using Unarc's release key. Th
   - Docker containers are immutable. In-place self-update (`unarc update`) is not supported and should not be used inside containers.
   - Updates occur strictly by pulling new immutable version tags:
     ```bash
-    docker pull ghcr.io/<owner>/unarc:0.2.1
+    docker pull ghcr.io/mosabbir-maruf/unarc:0.2.1
     ```
 - **GHCR Image Tagging & Retention**:
-  - **Immutable Release Tags**: `ghcr.io/<owner>/unarc:0.2.0` (primary integrity identity).
-  - **Convenience Tags**: `ghcr.io/<owner>/unarc:0.2` and `ghcr.io/<owner>/unarc:latest`.
+  - **Immutable Release Tags**: `ghcr.io/mosabbir-maruf/unarc:0.2.0` (primary integrity identity).
+  - **Convenience Tags**: `ghcr.io/mosabbir-maruf/unarc:0.2` and `ghcr.io/mosabbir-maruf/unarc:latest`.
   - **Retention Policy**: GHCR automated retention prunes untagged and older image tags, retaining the latest 2 semantic release versions.
 
 ---

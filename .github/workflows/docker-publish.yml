@@ -55,16 +55,11 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/mosabbir-maruf/Unarc
+            org.opencontainers.image.description=Ultra-minimal, hardened container image for Unarc
+            org.opencontainers.image.licenses=MIT
           tags: |
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.major_minor }}
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.image }}:latest
-
-      - name: Prune old GHCR image tags (Retain latest 2 versions)
-        uses: actions/delete-package-versions@v5
-        continue-on-error: true
-        with:
-          package-name: 'unarc'
-          package-type: 'container'
-          min-versions-to-keep: 2
-          delete-only-untagged-versions: 'false'

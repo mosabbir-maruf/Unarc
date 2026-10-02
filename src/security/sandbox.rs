@@ -431,12 +431,12 @@ impl SandboxRunner {
         F: FnMut(&[u8]) + Send,
     {
         let guard = Self::spawn(policy, args)?;
-        let output = guard
-            .wait_with_streaming(progress_callback)
-            .map_err(|e| ArchiveError::BackendFailure {
+        let output = guard.wait_with_streaming(progress_callback).map_err(|e| {
+            ArchiveError::BackendFailure {
                 backend: "bundled-7zz".to_string(),
                 message: format!("Failed to read output from confined engine process: {e}"),
-            })?;
+            }
+        })?;
 
         if crate::platform::signals::is_interrupted() {
             return Err(ArchiveError::ExtractionFailed {

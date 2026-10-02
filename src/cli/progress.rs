@@ -102,12 +102,7 @@ impl ProgressBar {
         } else {
             print!(
                 "\r\x1b[2K{}: [{}{}] {:>3}% {}{}",
-                self.operation,
-                filled_bar,
-                unfilled_bar,
-                pct,
-                time_str,
-                file_part
+                self.operation, filled_bar, unfilled_bar, pct, time_str, file_part
             );
         }
         let _ = std::io::stdout().flush();

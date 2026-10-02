@@ -353,7 +353,10 @@ fn clean_terminal_path(raw: &str) -> String {
     }
     let trimmed = s.trim_matches(|c| c == '\'' || c == '"').trim();
     if !Path::new(trimmed).exists() && trimmed.contains("\\ ") {
-        let unescaped = trimmed.replace("\\ ", " ").replace("\\(", "(").replace("\\)", ")");
+        let unescaped = trimmed
+            .replace("\\ ", " ")
+            .replace("\\(", "(")
+            .replace("\\)", ")");
         if Path::new(&unescaped).exists() {
             return unescaped;
         }

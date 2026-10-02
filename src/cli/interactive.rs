@@ -156,7 +156,8 @@ fn run_terminal_loop(
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d'))
                 {
-                    println!("\r\nExiting.");
+                    print!("\r\x1b[2Kunarc> \x1b[J\r\nExiting.\r\n");
+                    let _ = stdout().flush();
                     break;
                 }
 
@@ -200,9 +201,12 @@ fn run_terminal_loop(
                             buffer.clone()
                         };
 
+                        // Clear suggestions below the prompt and move to a clean line
+                        print!("\r\x1b[2Kunarc> {cmd_to_run}\x1b[J\r\n");
+                        let _ = stdout().flush();
+
                         // Temporarily disable raw mode to run commands cleanly
                         let _ = disable_raw_mode();
-                        println!("\r");
 
                         let trimmed = cmd_to_run.trim();
                         if trimmed == "/exit" || trimmed == "exit" || trimmed == "quit" {
@@ -240,8 +244,8 @@ fn run_terminal_loop(
 /// Renders the prompt and active suggestions inline.
 fn print_prompt(buffer: &str, selected_index: usize) {
     let mut out = stdout();
-    // Clear line and return to start
-    print!("\r\x1b[2Kunarc> {buffer}");
+    // Clear line, print prompt, and clear everything below from cursor to screen end
+    print!("\r\x1b[2Kunarc> {buffer}\x1b[J");
     let _ = out.flush();
 
     if buffer.starts_with('/') {

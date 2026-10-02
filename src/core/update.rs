@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Default official update source repository.
-pub const DEFAULT_UPDATE_SOURCE: &str = "https://github.com/unarc/unarc/releases/latest/download";
+pub const DEFAULT_UPDATE_SOURCE: &str =
+    "https://github.com/mosabbir-maruf/Unarc/releases/latest/download";
 
 /// Trait abstraction for downloading release manifests and artifacts.
 pub trait DownloadTransport: Send + Sync {

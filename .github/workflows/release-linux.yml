@@ -7,6 +7,9 @@ on:
       RELEASE_SIGNING_KEY:
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   build-linux:
     name: Build & Package Linux (${{ matrix.target }})
@@ -62,11 +65,19 @@ jobs:
         run: |
           ./target/release/unarc version
           ./target/release/unarc doctor
+          mkdir -p /tmp/smoke_out
+          echo "smoke_test_content" > /tmp/smoke.txt
+          python3 -c "import zipfile; z = zipfile.ZipFile('/tmp/smoke.zip', 'w'); z.write('/tmp/smoke.txt', 'smoke.txt')"
+          ./target/release/unarc test /tmp/smoke.zip
+          ./target/release/unarc extract /tmp/smoke.zip --output /tmp/smoke_out
+          cat /tmp/smoke_out/smoke.txt | grep "smoke_test_content"
+          rm -rf /tmp/smoke*
 
       - name: Package, hash, and sign release artifact
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-        run: ./scripts/package-release.sh linux ${{ matrix.arch }} target/release
+          STRICT_SIGNING: "true"
+        run: ./scripts/package-release.sh linux ${{ matrix.arch }} target/release --strict
 
       - name: Upload Linux release artifacts
         uses: actions/upload-artifact@v4

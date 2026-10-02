@@ -75,6 +75,15 @@ if [ "${MANIFEST_ARCH}" = "arm64" ]; then
     MANIFEST_ARCH="aarch64"
 fi
 
+STRICT_ARGS=()
+if [ "${STRICT_SIGNING:-false}" = "true" ] || [ "${4:-}" = "--strict" ]; then
+    STRICT_ARGS=(--strict)
+    if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
+        echo "Error: RELEASE_SIGNING_KEY secret is required in strict release mode" >&2
+        exit 1
+    fi
+fi
+
 # Run unarc-sign (either locally if available or through Docker dev container)
 if [ -f "${DIR}/target/release/unarc-sign" ]; then
     "${DIR}/target/release/unarc-sign" \
@@ -83,7 +92,8 @@ if [ -f "${DIR}/target/release/unarc-sign" ]; then
         --arch "${MANIFEST_ARCH}" \
         --version "${VERSION}" \
         --out-manifest "${MANIFEST_FILE}" \
-        --artifact-url "${PACKAGE_NAME}.tar.gz"
+        --artifact-url "${PACKAGE_NAME}.tar.gz" \
+        ${STRICT_ARGS[@]+"${STRICT_ARGS[@]}"}
 elif [ -f "${DIR}/target/debug/unarc-sign" ]; then
     "${DIR}/target/debug/unarc-sign" \
         --artifact "${ARCHIVE_PATH}" \
@@ -91,7 +101,8 @@ elif [ -f "${DIR}/target/debug/unarc-sign" ]; then
         --arch "${MANIFEST_ARCH}" \
         --version "${VERSION}" \
         --out-manifest "${MANIFEST_FILE}" \
-        --artifact-url "${PACKAGE_NAME}.tar.gz"
+        --artifact-url "${PACKAGE_NAME}.tar.gz" \
+        ${STRICT_ARGS[@]+"${STRICT_ARGS[@]}"}
 else
     # Run inside Docker via dev.sh (handles macOS /Volumes bind-mount fallback)
     "${DIR}/scripts/dev.sh" cargo run --bin unarc-sign -- \
@@ -100,7 +111,8 @@ else
         --arch "${MANIFEST_ARCH}" \
         --version "${VERSION}" \
         --out-manifest "/workspace/dist/${PACKAGE_NAME}.manifest.json" \
-        --artifact-url "${PACKAGE_NAME}.tar.gz"
+        --artifact-url "${PACKAGE_NAME}.tar.gz" \
+        ${STRICT_ARGS[@]+"${STRICT_ARGS[@]}"}
 fi
 
 echo "[4/4] Release manifest generated and verified: ${MANIFEST_FILE}"

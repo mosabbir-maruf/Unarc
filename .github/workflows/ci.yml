@@ -9,6 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     name: Verify (Pinned Toolchain 1.85.0)

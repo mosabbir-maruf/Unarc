@@ -7,6 +7,9 @@ on:
       RELEASE_SIGNING_KEY:
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   build-macos:
     name: Build & Package macOS arm64 Release
@@ -44,15 +47,23 @@ jobs:
           cp target/aarch64-apple-darwin/release/unarc-sign target/release/unarc-sign
           file target/release/unarc | grep "arm64"
 
-      - name: Run native smoke tests & diagnostics
+      - name: Run native smoke tests, doctor probe & extraction verification
         run: |
           ./target/release/unarc version
           ./target/release/unarc doctor
+          mkdir -p /tmp/smoke_out
+          echo "smoke_test_content" > /tmp/smoke.txt
+          python3 -c "import zipfile; z = zipfile.ZipFile('/tmp/smoke.zip', 'w'); z.write('/tmp/smoke.txt', 'smoke.txt')"
+          ./target/release/unarc test /tmp/smoke.zip
+          ./target/release/unarc extract /tmp/smoke.zip --output /tmp/smoke_out
+          cat /tmp/smoke_out/smoke.txt | grep "smoke_test_content"
+          rm -rf /tmp/smoke*
 
       - name: Package, hash, and sign release artifact
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-        run: ./scripts/package-release.sh macos arm64 target/release
+          STRICT_SIGNING: "true"
+        run: ./scripts/package-release.sh macos arm64 target/release --strict
 
       - name: Upload macOS release artifacts
         uses: actions/upload-artifact@v4

@@ -46,6 +46,10 @@ struct Args {
     /// Expected bundled 7zz SHA-256 hash
     #[arg(long)]
     bundled_7zz_sha256: Option<String>,
+
+    /// Strict release mode: requires explicit valid RELEASE_SIGNING_KEY secret
+    #[arg(long)]
+    strict: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -62,21 +66,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Resolve signing key from environment or fallback for test fixtures
     let signing_key = if let Ok(key_str) = std::env::var("RELEASE_SIGNING_KEY") {
         let key_trimmed = key_str.trim();
-        let bytes = if key_trimmed.len() == 64 {
-            hex_decode(key_trimmed).map_err(|e| format!("Invalid RELEASE_SIGNING_KEY hex: {e}"))?
+        if key_trimmed.is_empty() {
+            if args.strict {
+                eprintln!("Error: RELEASE_SIGNING_KEY secret is empty in strict release mode");
+                std::process::exit(1);
+            }
+            eprintln!("Note: RELEASE_SIGNING_KEY is empty; using test fixture signing seed.");
+            SigningKey::from_bytes(&OFFICIAL_RELEASE_SIGNING_SEED)
         } else {
-            key_trimmed.as_bytes().to_vec()
-        };
-        if bytes.len() != 32 {
-            eprintln!(
-                "Error: RELEASE_SIGNING_KEY must be exactly 32 bytes (or 64 hex characters), got {}",
-                bytes.len()
-            );
-            std::process::exit(1);
+            let bytes = if key_trimmed.len() == 64 {
+                hex_decode(key_trimmed)
+                    .map_err(|e| format!("Invalid RELEASE_SIGNING_KEY hex: {e}"))?
+            } else {
+                key_trimmed.as_bytes().to_vec()
+            };
+            if bytes.len() != 32 {
+                eprintln!(
+                    "Error: RELEASE_SIGNING_KEY must be exactly 32 bytes (or 64 hex characters), got {}",
+                    bytes.len()
+                );
+                std::process::exit(1);
+            }
+            let mut seed = [0u8; 32];
+            seed.copy_from_slice(&bytes);
+            SigningKey::from_bytes(&seed)
         }
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&bytes);
-        SigningKey::from_bytes(&seed)
+    } else if args.strict {
+        eprintln!(
+            "Error: RELEASE_SIGNING_KEY environment secret is required in strict release mode"
+        );
+        std::process::exit(1);
     } else {
         eprintln!("Note: RELEASE_SIGNING_KEY not set; using official test fixture signing seed.");
         SigningKey::from_bytes(&OFFICIAL_RELEASE_SIGNING_SEED)

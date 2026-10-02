@@ -17,11 +17,12 @@ run_cargo() {
         docker run --rm \
             -v "${DIR}:/workspace" \
             -w /workspace \
+            -e RELEASE_SIGNING_KEY="${RELEASE_SIGNING_KEY:-}" \
             "${IMAGE_NAME}" \
             cargo "$@"
     else
         # Fallback for environments where host path cannot be bind-mounted (e.g. macOS /Volumes in Docker Desktop)
-        CONTAINER_ID="$(docker create -v unarc-cargo-registry:/usr/local/cargo/registry -v unarc-cargo-git:/usr/local/cargo/git -w /workspace "${IMAGE_NAME}" cargo "$@")"
+        CONTAINER_ID="$(docker create -e RELEASE_SIGNING_KEY="${RELEASE_SIGNING_KEY:-}" -v unarc-cargo-registry:/usr/local/cargo/registry -v unarc-cargo-git:/usr/local/cargo/git -w /workspace "${IMAGE_NAME}" cargo "$@")"
         cleanup() {
             docker rm -f "${CONTAINER_ID}" >/dev/null 2>&1 || true
         }

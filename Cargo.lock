@@ -431,6 +431,7 @@ dependencies = [
  "rpassword",
  "serde",
  "serde_json",
+ "signal-hook",
  "thiserror",
 ]
 

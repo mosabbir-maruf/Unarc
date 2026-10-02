@@ -402,7 +402,7 @@ impl VolumeResolver {
         }
 
         if !metadata.file_type().is_file() {
-            return Err(ArchiveError::InvalidVolume {
+            return Err(ArchiveError::InputNotFile {
                 path: selected_path.display().to_string(),
                 reason: "Archive path must be a regular file".to_string(),
             });

@@ -14,6 +14,7 @@ use clap::Parser;
 
 /// Entrypoint for CLI execution, parses command line arguments and delegates to core application.
 pub fn run() -> Result<()> {
+    let _ = crate::platform::signals::install_signal_handlers();
     let cli = Cli::parse();
     run_with_cli(cli)
 }
@@ -26,7 +27,11 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
     match cli.command {
         None => {
             // Interactive mode when launched without a subcommand
-            run_interactive(&app, cli.quiet, cli.verbose, cli.json)
+            if let Err(e) = run_interactive(&app, cli.quiet, cli.verbose, cli.json) {
+                formatter.print_error(&e);
+                return Err(e);
+            }
+            Ok(())
         }
         Some(Commands::Version) => {
             formatter.print_version();
@@ -46,9 +51,16 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
             let res = match app.test_archive(&args.archive, None) {
                 Ok(r) => r,
                 Err(UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
-                    let password =
-                        rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
-                    app.test_archive(&args.archive, Some(&password))?
+                    let password = std::env::var("UNARC_PASSWORD").unwrap_or_else(|_| {
+                        rpassword::prompt_password("Enter archive password: ").unwrap_or_default()
+                    });
+                    match app.test_archive(&args.archive, Some(&password)) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            formatter.print_error(&e);
+                            return Err(e);
+                        }
+                    }
                 }
                 Err(e) => {
                     formatter.print_error(&e);
@@ -62,9 +74,20 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
             let res = match app.extract_archive(&args.archive, args.output.as_deref(), None) {
                 Ok(r) => r,
                 Err(UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
-                    let password =
-                        rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
-                    app.extract_archive(&args.archive, args.output.as_deref(), Some(&password))?
+                    let password = std::env::var("UNARC_PASSWORD").unwrap_or_else(|_| {
+                        rpassword::prompt_password("Enter archive password: ").unwrap_or_default()
+                    });
+                    match app.extract_archive(
+                        &args.archive,
+                        args.output.as_deref(),
+                        Some(&password),
+                    ) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            formatter.print_error(&e);
+                            return Err(e);
+                        }
+                    }
                 }
                 Err(e) => {
                     formatter.print_error(&e);

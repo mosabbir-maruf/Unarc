@@ -9,9 +9,10 @@ Designed targeting **macOS Apple Silicon** first, with full **Docker/Linux** dev
 ## Key Principles & Scope
 
 - **Zero Host Pollution**: All Rust compilation, formatting, linting, and testing run strictly inside pinned Docker containers (`rust:1.85.0-slim`).
-- **Hermetic Pinned Archive Engine**: Bundles an exact official release of 7-Zip (`7zz v24.09`). The engine is verified by SHA-256 and never downloaded at runtime or invoked from host package managers (like Homebrew).
+- **Hermetic Pinned Archive Engine**: Bundles an exact official release of 7-Zip (`7zz v26.03`). The engine is verified by SHA-256 and never downloaded at runtime or invoked from host package managers (like Homebrew).
 - **Interactive & Scriptable UX**: Supports both direct script commands and an interactive terminal shell with an ASCII wordmark, `/` command suggestions, arrow-key navigation, and Tab completion.
 - **Zero-Trust Extraction**: Comprehensive path traversal protection (`Zip Slip`), absolute path rejection, null-byte checks, and boundary containment enforcement.
+- **Production Reliability & Cleanup**: Deterministic exit codes, clean SIGINT/SIGTERM cancellation without zombie processes, and automatic partial extraction cleanup on failure.
 - **Privacy & Safety**: No telemetry, analytics, updater, network services, background daemons, persistent state, or uncoordinated file logging.
 
 ---
@@ -25,6 +26,33 @@ Designed targeting **macOS Apple Silicon** first, with full **Docker/Linux** dev
 | **macOS (7z2603-mac.tar.xz)** | `5ca87677072c59f5602e5c49baa27d4694bacd2259b4e507f0094249d4281480` |
 | **Linux ARM64 (7z2603-linux-arm64.tar.xz)** | `2389ba20e4d8295e8709c20b6263b69bd1ec4972fe38a04ad7a1badbf595b996` |
 | **Linux x86_64 (7z2603-linux-x64.tar.xz)** | `dc99eff5008f1ab79bd7084c68513701547a808a89502bf4133683535ab3c695` |
+
+---
+
+## Exit Codes
+
+Unarc defines deterministic, script-friendly exit codes for all operations:
+
+| Code | Identifier | Description |
+|---|---|---|
+| `0` | `SUCCESS` | Operation completed successfully |
+| `2` | `CLI_ERROR` | Invalid command line arguments or flags |
+| `10` | `INPUT_NOT_FOUND` | Archive file does not exist |
+| `11` | `INPUT_NOT_FILE` | Archive path points to a directory or non-regular file |
+| `12` | `UNSUPPORTED_FORMAT` | Archive format is unsupported or unknown |
+| `13` | `MISSING_VOLUME` | Multipart sequence is missing a required volume |
+| `14` | `INVALID_VOLUME` | Sibling volume is corrupt, not a file, or invalid |
+| `15` | `CORRUPT_ARCHIVE` | Archive data or header is corrupted |
+| `16` | `PASSWORD_REQUIRED` | Archive is password-protected and no password was supplied |
+| `17` | `INVALID_PASSWORD` | Supplied archive password is incorrect |
+| `18` | `OUTPUT_INVALID` | Extraction output destination is invalid or a non-directory file |
+| `20` | `PATH_TRAVERSAL` | Archive contains entries attempting Zip Slip path traversal |
+| `21` | `UNSAFE_ENTRY` | Archive contains unauthorized symlinks, hardlinks, or special nodes |
+| `22` | `SECURITY_POLICY_VIOLATION` | Sandbox or execution boundary constraint violated |
+| `30` | `PERMISSION_DENIED` | Filesystem permission denied during read or write operations |
+| `40` | `EXTRACTION_FAILED` | Archive extraction failed |
+| `41` | `ENGINE_FAILED` | Internal bundled archive engine failed to execute |
+| `130` | `INTERRUPTED` | Execution interrupted by SIGINT / SIGTERM signal |
 
 ---
 
@@ -43,11 +71,15 @@ unarc test path/to/archive.7z
 unarc info
 unarc --json info
 
+# Run system security and health diagnostics
+unarc doctor
+unarc --json doctor
+
 # Display binary version
 unarc version
 ```
 
-> **Note on Password-Protected Archives**: If an archive is encrypted, Unarc prompts for the password interactively via the terminal. No plaintext `--password` CLI argument is exposed.
+> **Note on Password-Protected Archives**: When an archive is encrypted, Unarc prompts interactively via masked terminal input (`rpassword`) without echo. In headless/scripted environments, the `UNARC_PASSWORD` environment variable is supported.
 
 ### Interactive Mode
 
@@ -84,6 +116,30 @@ Available Interactive Commands:
 
 ---
 
+## Performance & Benchmarks
+
+Unarc streams extraction directly through the sandboxed engine to ensure bounded memory consumption regardless of archive payload size:
+
+```bash
+# Run the automated benchmark suite
+make bench
+```
+
+### Benchmark Results (Apple Silicon M-Series)
+
+| Scenario | Archive Size | Extracted Size | Wall Time | Peak RSS | Throughput | Status |
+|---|---|---|---|---|---|---|
+| **Small (100KB)** | 0.3 KB | 0.10 MB | 528 ms | 3.97 MB | 0.18 MB/s | PASS |
+| **Medium (10MB)** | 10.2 MB | 10.00 MB | 52 ms | 27.20 MB | 189.61 MB/s | PASS |
+| **Large (50MB)** | 51.2 MB | 50.00 MB | 65 ms | 27.44 MB | 768.26 MB/s | PASS |
+| **Multipart (10MB)** | 5.1 MB | 10.00 MB | 42 ms | 2.27 MB | 233.09 MB/s | PASS |
+| **Encrypted (5MB)** | 5.1 MB | 5.00 MB | 108 ms | 16.00 MB | 45.88 MB/s | PASS |
+
+- **Bounded Memory**: Peak RSS remains under 30MB even for large streaming extractions.
+- **High Throughput**: 190–770 MB/s streaming decompression.
+
+---
+
 ## Development & Automation Commands
 
 All commands run through the pinned toolchain container (`rust:1.85.0-slim`):
@@ -109,4 +165,7 @@ make build
 
 # Build optimized release binary
 make release
+
+# Run performance benchmark suite
+make bench
 ```

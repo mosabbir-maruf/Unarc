@@ -8,12 +8,104 @@ use crate::archive::bundled::{
 use crate::archive::format::ArchiveFormat;
 use crate::archive::metadata::ArchiveMetadata;
 use crate::archive::volume::VolumeResolver;
-use crate::error::{ArchiveError, Result};
+use crate::error::{ArchiveError, Result, UnarcError};
 use crate::platform::PlatformInfo;
 use crate::security::{
     ProcessSandboxPolicy, SandboxRunner, SandboxStatus, ScratchWorkspace, SecurityContext,
     SecurityPolicy,
 };
+
+/// RAII guard ensuring incomplete extractions are cleaned up on failure or interruption.
+#[derive(Debug)]
+pub struct PartialExtractionGuard {
+    destination: PathBuf,
+    destination_existed_before: bool,
+    pre_existing_entries: std::collections::HashSet<PathBuf>,
+    disarmed: bool,
+}
+
+impl PartialExtractionGuard {
+    /// Creates a guard snapshotting pre-existing entries in the destination directory.
+    pub fn new(destination: &Path) -> Self {
+        let destination_existed_before = destination.exists();
+        let mut pre_existing_entries = std::collections::HashSet::new();
+
+        if destination_existed_before {
+            if let Ok(canon) = destination.canonicalize() {
+                let mut stack = vec![canon.clone()];
+                while let Some(dir) = stack.pop() {
+                    if let Ok(entries) = std::fs::read_dir(&dir) {
+                        for entry_res in entries.flatten() {
+                            let p = entry_res.path();
+                            if let Ok(rel) = p.strip_prefix(&canon) {
+                                pre_existing_entries.insert(rel.to_path_buf());
+                            }
+                            if p.is_dir() && !p.is_symlink() {
+                                stack.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Self {
+            destination: destination.to_path_buf(),
+            destination_existed_before,
+            pre_existing_entries,
+            disarmed: false,
+        }
+    }
+
+    /// Disarms the guard upon successful extraction and verification.
+    pub fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for PartialExtractionGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+
+        if !self.destination_existed_before {
+            let _ = std::fs::remove_dir_all(&self.destination);
+        } else if let Ok(canon) = self.destination.canonicalize() {
+            let mut files_to_delete = Vec::new();
+            let mut dirs_to_delete = Vec::new();
+
+            let mut stack = vec![canon.clone()];
+            while let Some(dir) = stack.pop() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry_res in entries.flatten() {
+                        let p = entry_res.path();
+                        if let Ok(rel) = p.strip_prefix(&canon) {
+                            if !self.pre_existing_entries.contains(rel) {
+                                if p.is_dir() && !p.is_symlink() {
+                                    dirs_to_delete.push(p.clone());
+                                    stack.push(p);
+                                } else {
+                                    files_to_delete.push(p);
+                                }
+                            } else if p.is_dir() && !p.is_symlink() {
+                                stack.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for f in files_to_delete {
+                let _ = std::fs::remove_file(f);
+            }
+            dirs_to_delete.sort_by_key(|b| std::cmp::Reverse(b.as_os_str().len()));
+            for d in dirs_to_delete {
+                let _ = std::fs::remove_dir(d);
+            }
+        }
+    }
+}
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Read;
@@ -343,6 +435,19 @@ impl Application {
             .into());
         }
 
+        let meta = std::fs::symlink_metadata(path).map_err(UnarcError::Io)?;
+        if !meta.is_file() {
+            return Err(ArchiveError::InputNotFile {
+                path: path.to_string_lossy().to_string(),
+                reason: if meta.is_dir() {
+                    "path is a directory".to_string()
+                } else {
+                    "path is not a regular file".to_string()
+                },
+            }
+            .into());
+        }
+
         // 1. Deterministic volume sequence resolution
         let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
 
@@ -352,10 +457,22 @@ impl Application {
         let sandbox_policy = ProcessSandboxPolicy::new(engine_path, scratch.path().to_path_buf())
             .with_inputs(volume_set.volumes.clone());
 
+        crate::platform::signals::check_interrupted()?;
+
         // 3. Run integrity check on the primary volume within sandbox boundary
-        let mut res =
-            self.backend
-                .test_with_policy(&volume_set.primary_volume, password, &sandbox_policy)?;
+        let mut res = match self.backend.test_with_policy(
+            &volume_set.primary_volume,
+            password,
+            &sandbox_policy,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                if crate::platform::signals::is_interrupted() {
+                    return Err(crate::error::UnarcError::Interrupted);
+                }
+                return Err(e.into());
+            }
+        };
         res.path = path.to_path_buf();
         res.format = volume_set.format;
         Ok(res)
@@ -390,6 +507,19 @@ impl Application {
             .into());
         }
 
+        let meta = std::fs::symlink_metadata(path).map_err(UnarcError::Io)?;
+        if !meta.is_file() {
+            return Err(ArchiveError::InputNotFile {
+                path: path.to_string_lossy().to_string(),
+                reason: if meta.is_dir() {
+                    "path is a directory".to_string()
+                } else {
+                    "path is not a regular file".to_string()
+                },
+            }
+            .into());
+        }
+
         // 1. Deterministic volume resolution (fails immediately on missing or invalid volumes)
         let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
 
@@ -419,6 +549,14 @@ impl Application {
             std::env::current_dir()?.join(clean_stem)
         };
 
+        if destination.exists() && !destination.is_dir() {
+            return Err(ArchiveError::OutputInvalid {
+                path: destination.display().to_string(),
+                reason: "Destination exists but is not a directory".to_string(),
+            }
+            .into());
+        }
+
         // 3. Pre-extract security inspection:
         // List entries in the archive to detect path traversal, absolute paths, or unauthorized symlinks upfront
         if let Ok(entries) = self
@@ -439,6 +577,8 @@ impl Application {
             }
         }
 
+        let mut guard = PartialExtractionGuard::new(&destination);
+
         // 4. Extract through bundled engine backend under OS-level confinement
         let scratch = ScratchWorkspace::new()?;
         let engine_path = resolve_bundled_engine()?;
@@ -446,17 +586,32 @@ impl Application {
             .with_inputs(volume_set.volumes.clone())
             .with_destination(destination.clone());
 
-        let mut result = self.backend.extract_with_policy(
+        crate::platform::signals::check_interrupted()?;
+
+        let mut result = match self.backend.extract_with_policy(
             &volume_set.primary_volume,
             &destination,
             password,
             &sandbox_policy,
-        )?;
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                if crate::platform::signals::is_interrupted() {
+                    return Err(crate::error::UnarcError::Interrupted);
+                }
+                return Err(e.into());
+            }
+        };
         result.archive_path = path.to_path_buf();
         result.format = volume_set.format;
 
+        crate::platform::signals::check_interrupted()?;
+
         // 5. Post-extraction safety verification: verify boundary containment, symlinks, hardlinks, device nodes
         self.verify_extracted_destination(&destination, &mut result)?;
+
+        // Extraction succeeded and passed all verification checks: disarm cleanup guard
+        guard.disarm();
 
         Ok(result)
     }
@@ -485,8 +640,10 @@ impl Application {
 
         let mut stack = vec![dest_canonical.clone()];
         while let Some(current_dir) = stack.pop() {
+            crate::platform::signals::check_interrupted()?;
             let read_dir = std::fs::read_dir(&current_dir)?;
             for entry_res in read_dir {
+                crate::platform::signals::check_interrupted()?;
                 let entry = entry_res?;
                 let path = entry.path();
                 let symlink_meta = std::fs::symlink_metadata(&path)?;
@@ -510,8 +667,8 @@ impl Application {
                     if ft.is_fifo() || ft.is_char_device() || ft.is_block_device() || ft.is_socket()
                     {
                         let _ = std::fs::remove_file(&path);
-                        return Err(crate::error::SecurityError::PolicyViolation {
-                            reason: format!(
+                        return Err(crate::error::SecurityError::UnsafeEntry {
+                            details: format!(
                                 "Special filesystem node (FIFO/device/socket) detected and rejected: {}",
                                 path.display()
                             ),
@@ -523,8 +680,8 @@ impl Application {
                     use std::os::unix::fs::MetadataExt;
                     if symlink_meta.is_file() && symlink_meta.nlink() > 1 {
                         let _ = std::fs::remove_file(&path);
-                        return Err(crate::error::SecurityError::PolicyViolation {
-                            reason: format!("Hardlink detected and rejected: {}", path.display()),
+                        return Err(crate::error::SecurityError::UnsafeEntry {
+                            details: format!("Hardlink detected and rejected: {}", path.display()),
                         }
                         .into());
                     }
@@ -565,7 +722,19 @@ impl Application {
             .into());
         }
 
-        let file_meta = std::fs::metadata(path)?;
+        let file_meta = std::fs::symlink_metadata(path)?;
+        if !file_meta.is_file() {
+            return Err(ArchiveError::InputNotFile {
+                path: path.to_string_lossy().to_string(),
+                reason: if file_meta.is_dir() {
+                    "path is a directory".to_string()
+                } else {
+                    "path is not a regular file".to_string()
+                },
+            }
+            .into());
+        }
+
         let file_size = file_meta.len();
 
         // Read initial header bytes for magic number identification
@@ -651,6 +820,57 @@ mod tests {
     fn test_inspect_nonexistent_file() {
         let app = Application::default();
         let res = app.inspect_archive(Path::new("non_existent_file.zip"));
-        assert!(res.is_err());
+        assert!(matches!(
+            res,
+            Err(UnarcError::Archive(ArchiveError::FileNotFound { .. }))
+        ));
+    }
+
+    #[test]
+    fn test_inspect_directory_fails_with_input_not_file() {
+        let app = Application::default();
+        let temp_dir = std::env::temp_dir();
+        let res = app.inspect_archive(&temp_dir);
+        assert!(matches!(
+            res,
+            Err(UnarcError::Archive(ArchiveError::InputNotFile { .. }))
+        ));
+        if let Err(e) = res {
+            assert_eq!(e.code(), crate::error::ErrorCode::InputNotFile);
+            assert_eq!(e.exit_code(), 11);
+        }
+    }
+
+    #[test]
+    fn test_partial_extraction_guard_lifecycle() {
+        let temp_dir = std::env::temp_dir().join(format!("guard_test_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let existing_file = temp_dir.join("existing.txt");
+        std::fs::write(&existing_file, b"keep this").unwrap();
+
+        // 1. Test partial extraction cleanup on dropped guard
+        {
+            let _guard = PartialExtractionGuard::new(&temp_dir);
+            let created_file = temp_dir.join("new_file.txt");
+            std::fs::write(&created_file, b"discard this").unwrap();
+            assert!(created_file.exists());
+            // _guard drops here without disarming
+        }
+
+        assert!(existing_file.exists());
+        assert!(!temp_dir.join("new_file.txt").exists());
+
+        // 2. Test disarmed guard does not delete new files
+        {
+            let mut guard = PartialExtractionGuard::new(&temp_dir);
+            let kept_file = temp_dir.join("kept.txt");
+            std::fs::write(&kept_file, b"keep this too").unwrap();
+            guard.disarm();
+        }
+
+        assert!(temp_dir.join("kept.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -10,7 +10,7 @@ use unarc::cli::interactive::{execute_interactive_command, filter_suggestions};
 use unarc::cli::output::OutputFormatter;
 use unarc::cli::run_with_cli;
 use unarc::core::Application;
-use unarc::error::{ArchiveError, UnarcError};
+use unarc::error::{ArchiveError, ErrorCode, UnarcError};
 use unarc::security::{
     ProcessSandboxPolicy, SandboxRunner, SandboxStatus, ScratchWorkspace, SecurityPolicy,
 };
@@ -1292,5 +1292,362 @@ fn test_fail_closed_when_kernel_sandbox_required() {
                     .to_string()
                     .contains("strict kernel sandbox is required")
         );
+    }
+}
+
+// =========================================================================
+// Phase 5 Reliability, Exit Codes, Interruption & Resource Tests
+// =========================================================================
+
+#[test]
+fn test_phase5_exit_code_input_not_found() {
+    let cli = Cli {
+        json: true,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: PathBuf::from("completely_nonexistent_archive_xyz.rar"),
+            output: None,
+        })),
+    };
+    let res = run_with_cli(cli);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::InputNotFound);
+    assert_eq!(err.exit_code(), 10);
+}
+
+#[test]
+fn test_phase5_exit_code_input_not_file() {
+    let temp_dir = std::env::temp_dir();
+    let cli = Cli {
+        json: true,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: temp_dir,
+            output: None,
+        })),
+    };
+    let res = run_with_cli(cli);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::InputNotFile);
+    assert_eq!(err.exit_code(), 11);
+}
+
+#[test]
+fn test_phase5_exit_code_unsupported_format() {
+    let temp_file = std::env::temp_dir().join("test_unsupported.someunknowneffect");
+    std::fs::write(&temp_file, b"this is not an archive").unwrap();
+
+    let cli = Cli {
+        json: true,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: temp_file.clone(),
+            output: None,
+        })),
+    };
+    let res = run_with_cli(cli);
+    let _ = std::fs::remove_file(&temp_file);
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::UnsupportedFormat);
+    assert_eq!(err.exit_code(), 12);
+}
+
+#[test]
+fn test_phase5_exit_code_missing_volume() {
+    let temp_dir = std::env::temp_dir().join("p5_missing_vol");
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let part1 = temp_dir.join("Archive.part1.rar");
+    // Synthetic RAR4 multi-volume header (part 1 of N)
+    let part1_bytes = build_synthetic_rar4_volume("part1.txt", b"data1", true, true, false, true);
+    std::fs::write(&part1, &part1_bytes).unwrap();
+    // Intentionally omit Archive.part2.rar
+
+    let cli = Cli {
+        json: true,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: part1,
+            output: None,
+        })),
+    };
+    let res = run_with_cli(cli);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::MissingVolume);
+    assert_eq!(err.exit_code(), 13);
+}
+
+#[test]
+fn test_phase5_exit_code_invalid_volume() {
+    let temp_dir = std::env::temp_dir().join("p5_invalid_vol");
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let part1 = temp_dir.join("Archive.part1.rar");
+    let part1_bytes = build_synthetic_rar4_volume("part1.txt", b"data1", true, true, false, true);
+    std::fs::write(&part1, &part1_bytes).unwrap();
+
+    let part2 = temp_dir.join("Archive.part2.rar");
+    // Invalid corrupted header in second volume
+    std::fs::write(&part2, b"CORRUPTED_NON_RAR_GARBAGE").unwrap();
+
+    let cli = Cli {
+        json: true,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: part1,
+            output: None,
+        })),
+    };
+    let res = run_with_cli(cli);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::InvalidVolume);
+    assert_eq!(err.exit_code(), 14);
+}
+
+#[test]
+fn test_phase5_exit_code_corrupt_archive() {
+    let temp_file = std::env::temp_dir().join("p5_corrupt.rar");
+    // Valid RAR magic header but immediately followed by corrupt data
+    let mut data = vec![0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00];
+    data.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00]);
+    std::fs::write(&temp_file, &data).unwrap();
+
+    let app = Application::default();
+    let res = app.extract_archive(&temp_file, None, None);
+    let _ = std::fs::remove_file(&temp_file);
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CorruptArchive);
+    assert_eq!(err.exit_code(), 15);
+}
+
+#[test]
+fn test_phase5_exit_code_output_invalid_when_destination_is_file() {
+    let temp_dir = std::env::temp_dir();
+    let dummy_archive = temp_dir.join("p5_dummy.zip");
+    std::fs::write(
+        &dummy_archive,
+        build_synthetic_zip_with_path("file.txt", b"content"),
+    )
+    .unwrap();
+
+    let file_dest = temp_dir.join("p5_dest_is_file.txt");
+    std::fs::write(&file_dest, b"already a file").unwrap();
+
+    let app = Application::default();
+    let res = app.extract_archive(&dummy_archive, Some(&file_dest), None);
+    let _ = std::fs::remove_file(&dummy_archive);
+    let _ = std::fs::remove_file(&file_dest);
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::OutputInvalid);
+    assert_eq!(err.exit_code(), 18);
+}
+
+#[test]
+fn test_phase5_exit_code_path_traversal() {
+    let temp_dir = std::env::temp_dir();
+    let traversal_zip = temp_dir.join("p5_traversal.zip");
+    let zip_bytes = build_synthetic_zip_with_path("../evil_traversal.txt", b"evil");
+    std::fs::write(&traversal_zip, &zip_bytes).unwrap();
+
+    let app = Application::default();
+    let res = app.extract_archive(&traversal_zip, None, None);
+    let _ = std::fs::remove_file(&traversal_zip);
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::PathTraversal);
+    assert_eq!(err.exit_code(), 20);
+}
+
+#[test]
+fn test_phase5_exit_code_unsafe_entry_symlink() {
+    let temp_dir = std::env::temp_dir();
+    let symlink_zip = temp_dir.join("p5_symlink.zip");
+    let out_dir = temp_dir.join("p5_symlink_out");
+
+    let zip_bytes = build_synthetic_zip_with_symlink("evil_link.txt", "/etc/shadow");
+    std::fs::write(&symlink_zip, &zip_bytes).unwrap();
+
+    let app = Application::default();
+    let res = app.extract_archive(&symlink_zip, Some(&out_dir), None);
+    let _ = std::fs::remove_file(&symlink_zip);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::UnsafeEntry);
+    assert_eq!(err.exit_code(), 21);
+}
+
+#[test]
+fn test_phase5_exit_code_security_policy_violation() {
+    let policy = SecurityPolicy::strict().with_require_kernel_sandbox(true);
+    let app = Application::new(Some(policy));
+
+    let status = SandboxRunner::probe_status();
+    if status != SandboxStatus::Enforced {
+        let temp_archive = std::env::temp_dir().join("p5_sec_viol.rar");
+        std::fs::write(&temp_archive, b"dummy").unwrap();
+
+        let res = app.extract_archive(&temp_archive, None, None);
+        let _ = std::fs::remove_file(&temp_archive);
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(err.code(), ErrorCode::SecurityPolicyViolation);
+        assert_eq!(err.exit_code(), 22);
+    }
+}
+
+#[test]
+fn test_phase5_exit_code_interrupted() {
+    unarc::platform::signals::set_interrupted(true);
+    let temp_file = std::env::temp_dir().join("p5_dummy_interrupted.zip");
+    std::fs::write(
+        &temp_file,
+        build_synthetic_zip_with_path("file.txt", b"content"),
+    )
+    .unwrap();
+
+    let app = Application::default();
+    let res = app.extract_archive(&temp_file, None, None);
+    let _ = std::fs::remove_file(&temp_file);
+    unarc::platform::signals::reset_interrupted();
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::Interrupted);
+    assert_eq!(err.exit_code(), 130);
+}
+
+#[test]
+fn test_phase5_partial_cleanup_on_interruption_or_failure() {
+    let temp_dir = std::env::temp_dir().join("p5_cleanup_test");
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let pre_existing = temp_dir.join("already_here.txt");
+    std::fs::write(&pre_existing, b"must be preserved").unwrap();
+
+    // Simulate partial extraction by arming guard and creating new files
+    {
+        let _guard = unarc::core::app::PartialExtractionGuard::new(&temp_dir);
+        let incomplete_extracted = temp_dir.join("partial_movie.mkv");
+        std::fs::write(&incomplete_extracted, b"corrupted partial payload").unwrap();
+        assert!(incomplete_extracted.exists());
+        // Simulating failure/interruption: guard drops without disarming
+    }
+
+    // Guard drop must have cleaned up the partial extraction file
+    assert!(!temp_dir.join("partial_movie.mkv").exists());
+    // Pre-existing file must remain intact
+    assert!(pre_existing.exists());
+    assert_eq!(std::fs::read(&pre_existing).unwrap(), b"must be preserved");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase5_exit_code_password_required_and_invalid_password() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample_file = temp_dir.join("p5_secret_sample.txt");
+    std::fs::write(&sample_file, b"top secret data").unwrap();
+
+    let enc_archive = temp_dir.join("p5_encrypted.7z");
+    let out_dir = temp_dir.join("p5_enc_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    // Create encrypted archive using 7zz with header encryption
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            "-pCorrectPass",
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    let app = Application::default();
+
+    // 1. Without password -> PASSWORD_REQUIRED (exit code 16)
+    let res_no_pwd = app.extract_archive(&enc_archive, Some(&out_dir), None);
+    assert!(res_no_pwd.is_err());
+    let err_no_pwd = res_no_pwd.unwrap_err();
+    assert_eq!(err_no_pwd.code(), ErrorCode::PasswordRequired);
+    assert_eq!(err_no_pwd.exit_code(), 16);
+
+    // 2. With wrong password -> INVALID_PASSWORD (exit code 17)
+    let res_wrong_pwd = app.extract_archive(&enc_archive, Some(&out_dir), Some("WrongPass123"));
+    assert!(res_wrong_pwd.is_err());
+    let err_wrong_pwd = res_wrong_pwd.unwrap_err();
+    assert_eq!(err_wrong_pwd.code(), ErrorCode::InvalidPassword);
+    assert_eq!(err_wrong_pwd.exit_code(), 17);
+
+    // 3. With correct password -> Success!
+    let res_ok = app.extract_archive(&enc_archive, Some(&out_dir), Some("CorrectPass"));
+    assert!(res_ok.is_ok());
+
+    let _ = std::fs::remove_file(&sample_file);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_phase5_exit_code_permission_denied() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = std::env::temp_dir();
+        let unreadable = temp_dir.join("p5_unreadable.zip");
+        std::fs::write(
+            &unreadable,
+            build_synthetic_zip_with_path("data.txt", b"secret"),
+        )
+        .unwrap();
+
+        // Remove read permissions (chmod 000)
+        let _ = std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000));
+
+        let app = Application::default();
+        let res = app.extract_archive(&unreadable, None, None);
+
+        // Restore permissions for cleanup
+        let _ = std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o644));
+        let _ = std::fs::remove_file(&unreadable);
+
+        if let Err(err) = res {
+            assert_eq!(err.code(), ErrorCode::PermissionDenied);
+            assert_eq!(err.exit_code(), 30);
+        }
     }
 }

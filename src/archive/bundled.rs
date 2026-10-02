@@ -170,6 +170,31 @@ impl SevenZipBackend {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let combined = format!("{stdout}\n{stderr}");
 
+        if crate::platform::signals::is_interrupted() {
+            return Err(ArchiveError::ExtractionFailed {
+                message: "Integrity check interrupted by signal".to_string(),
+            });
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(sig) = output.status.signal() {
+                if sig == libc::SIGINT || sig == libc::SIGTERM || sig == libc::SIGKILL {
+                    crate::platform::signals::set_interrupted(true);
+                    return Err(ArchiveError::ExtractionFailed {
+                        message: "Process terminated by signal".to_string(),
+                    });
+                }
+            }
+        }
+
+        if combined.contains("Permission denied") || combined.contains("Access is denied") {
+            return Err(ArchiveError::PermissionDenied {
+                path: path.to_string_lossy().to_string(),
+            });
+        }
+
         if combined.contains("Cannot find volume")
             || combined.contains("Can not find volume")
             || combined.contains("Missing volume")
@@ -197,7 +222,10 @@ impl SevenZipBackend {
         }
 
         if !output.status.success() {
-            if combined.contains("Headers Error") || combined.contains("Data Error") {
+            if combined.contains("Headers Error")
+                || combined.contains("Data Error")
+                || combined.contains("Cannot open the file as archive")
+            {
                 return Err(ArchiveError::CorruptArchive {
                     message: "Archive headers or data CRC check failed".to_string(),
                 });
@@ -232,9 +260,14 @@ impl SevenZipBackend {
         }
 
         // Create destination directory if it does not already exist
-        std::fs::create_dir_all(destination).map_err(|e| ArchiveError::BackendFailure {
-            backend: "bundled-7zz".to_string(),
-            message: format!("Failed to create destination directory: {e}"),
+        std::fs::create_dir_all(destination).map_err(|e| match e.kind() {
+            std::io::ErrorKind::PermissionDenied => ArchiveError::PermissionDenied {
+                path: destination.display().to_string(),
+            },
+            _ => ArchiveError::OutputInvalid {
+                path: destination.display().to_string(),
+                reason: e.to_string(),
+            },
         })?;
 
         let format = ArchiveFormat::from_path(path).unwrap_or(ArchiveFormat::Zip);
@@ -261,6 +294,31 @@ impl SevenZipBackend {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let combined = format!("{stdout}\n{stderr}");
+
+        if crate::platform::signals::is_interrupted() {
+            return Err(ArchiveError::ExtractionFailed {
+                message: "Extraction interrupted by signal".to_string(),
+            });
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(sig) = output.status.signal() {
+                if sig == libc::SIGINT || sig == libc::SIGTERM || sig == libc::SIGKILL {
+                    crate::platform::signals::set_interrupted(true);
+                    return Err(ArchiveError::ExtractionFailed {
+                        message: "Process terminated by signal".to_string(),
+                    });
+                }
+            }
+        }
+
+        if combined.contains("Permission denied") || combined.contains("Access is denied") {
+            return Err(ArchiveError::PermissionDenied {
+                path: destination.display().to_string(),
+            });
+        }
 
         if combined.contains("Cannot find volume")
             || combined.contains("Can not find volume")
@@ -289,13 +347,20 @@ impl SevenZipBackend {
         }
 
         if !output.status.success() {
-            if combined.contains("Headers Error") || combined.contains("Data Error") {
+            if combined.contains("Headers Error")
+                || combined.contains("Data Error")
+                || combined.contains("Cannot open the file as archive")
+            {
                 return Err(ArchiveError::CorruptArchive {
                     message: "Archive contains corrupted files or headers".to_string(),
                 });
             }
-            return Err(ArchiveError::BackendFailure {
-                backend: "bundled-7zz".to_string(),
+            if combined.contains("No space left on device") || combined.contains("Disk full") {
+                return Err(ArchiveError::ExtractionFailed {
+                    message: "Insufficient disk space to extract archive".to_string(),
+                });
+            }
+            return Err(ArchiveError::ExtractionFailed {
                 message: format!("Extraction failed with exit code: {:?}", output.status),
             });
         }

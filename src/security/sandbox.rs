@@ -344,12 +344,20 @@ impl SandboxRunner {
         S: AsRef<OsStr>,
     {
         let guard = Self::spawn(policy, args)?;
-        guard
+        let output = guard
             .wait_with_output()
             .map_err(|e| ArchiveError::BackendFailure {
                 backend: "bundled-7zz".to_string(),
                 message: format!("Failed to read output from confined engine process: {e}"),
-            })
+            })?;
+
+        if crate::platform::signals::is_interrupted() {
+            return Err(ArchiveError::ExtractionFailed {
+                message: "Process execution interrupted by signal".to_string(),
+            });
+        }
+
+        Ok(output)
     }
 
     /// Builds a sanitized, confined `Command` configured for the platform.

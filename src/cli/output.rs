@@ -229,15 +229,20 @@ impl OutputFormatter {
 
     /// Formats and displays error message.
     pub fn print_error(&self, error: &UnarcError) {
+        let code = error.code();
         if self.json_mode {
             let val = json!({
                 "status": "error",
+                "error_code": code.as_str(),
                 "exit_code": error.exit_code(),
                 "message": error.to_string(),
             });
             eprintln!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
         } else {
-            eprintln!("error: {error}");
+            eprintln!("error [{}]: {error}", code.as_str());
+            if self.verbose {
+                eprintln!("  Diagnostic detail: exit_code={}", error.exit_code());
+            }
         }
     }
 }

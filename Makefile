@@ -37,6 +37,9 @@ build:
 release:
 	./scripts/dev.sh release
 
+bench:
+	./scripts/benchmark.sh
+
 check:
 	./scripts/dev.sh check
 

@@ -214,6 +214,7 @@ fn run_terminal_loop(
                         if !trimmed.is_empty() {
                             if let Err(e) = execute_interactive_command(app, formatter, trimmed) {
                                 formatter.print_error(&e);
+                                crate::platform::signals::reset_interrupted();
                             }
                         }
 
@@ -328,13 +329,6 @@ fn prompt_and_run_test(
     stdin().read_line(&mut line)?;
     let archive_path = PathBuf::from(line.trim().trim_matches('"'));
 
-    if !archive_path.exists() {
-        return Err(ArchiveError::FileNotFound {
-            path: archive_path.to_string_lossy().to_string(),
-        }
-        .into());
-    }
-
     // Try testing without password first
     match app.test_archive(&archive_path, None) {
         Ok(res) => {
@@ -343,8 +337,9 @@ fn prompt_and_run_test(
         }
         Err(crate::error::UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
             // Prompt for password interactively
-            let password =
-                rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
+            let password = std::env::var("UNARC_PASSWORD").unwrap_or_else(|_| {
+                rpassword::prompt_password("Enter archive password: ").unwrap_or_default()
+            });
             let res = app.test_archive(&archive_path, Some(&password))?;
             formatter.print_test_result(&res);
             Ok(())
@@ -364,13 +359,6 @@ fn prompt_and_run_extract(
     stdin().read_line(&mut archive_line)?;
     let archive_path = PathBuf::from(archive_line.trim().trim_matches('"'));
 
-    if !archive_path.exists() {
-        return Err(ArchiveError::FileNotFound {
-            path: archive_path.to_string_lossy().to_string(),
-        }
-        .into());
-    }
-
     print!("Enter destination directory (leave empty for default): ");
     let _ = stdout().flush();
     let mut dest_line = String::new();
@@ -389,8 +377,9 @@ fn prompt_and_run_extract(
             Ok(())
         }
         Err(crate::error::UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
-            let password =
-                rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
+            let password = std::env::var("UNARC_PASSWORD").unwrap_or_else(|_| {
+                rpassword::prompt_password("Enter archive password: ").unwrap_or_default()
+            });
             let res = app.extract_archive(&archive_path, dest_opt, Some(&password))?;
             formatter.print_extract_result(&res);
             Ok(())

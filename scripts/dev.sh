@@ -78,6 +78,9 @@ case "${COMMAND}" in
     release)
         run_cargo build --release "$@"
         ;;
+    bench)
+        "${DIR}/scripts/benchmark.sh" "$@"
+        ;;
     check)
         echo "=== [1/4] Checking Formatting ==="
         run_cargo fmt --all -- --check

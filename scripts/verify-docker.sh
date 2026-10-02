@@ -73,6 +73,9 @@ TEST_DIR=$(mktemp -d /tmp/unarc_docker_verify_XXXXXX)
 trap 'rm -rf "${TEST_DIR}"' EXIT
 
 mkdir -p "${TEST_DIR}/input" "${TEST_DIR}/output"
+chmod 755 "${TEST_DIR}"
+chmod -R a+rX "${TEST_DIR}/input"
+chmod 777 "${TEST_DIR}/output"
 echo "hardened_docker_payload_content_12345" > "${TEST_DIR}/input/sample.txt"
 # Create test archive using python or zip
 python3 -c "import zipfile; z = zipfile.ZipFile('${TEST_DIR}/input/test.zip', 'w'); z.write('${TEST_DIR}/input/sample.txt', 'sample.txt')"

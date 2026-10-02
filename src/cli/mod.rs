@@ -3,6 +3,7 @@
 pub mod args;
 pub mod interactive;
 pub mod output;
+pub mod progress;
 
 pub use args::{Cli, Commands, ExtractArgs, TestArgs};
 pub use interactive::run_interactive;
@@ -50,8 +51,20 @@ pub fn run_test_with_prompt<P: PasswordPrompter>(
     app: &Application,
     archive: &Path,
     prompter: &P,
+    show_progress: bool,
 ) -> Result<ArchiveTestResult> {
-    match app.test_archive(archive, None) {
+    let run_with_bar = |pwd: Option<&str>| -> Result<ArchiveTestResult> {
+        if show_progress {
+            let mut bar = crate::cli::progress::ProgressBar::new("Testing");
+            let res = app.test_archive_with_progress(archive, pwd, Some(&mut bar));
+            bar.finish();
+            res
+        } else {
+            app.test_archive(archive, pwd)
+        }
+    };
+
+    match run_with_bar(None) {
         Ok(r) => Ok(r),
         Err(e @ UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
             if !prompter.is_interactive() {
@@ -60,7 +73,7 @@ pub fn run_test_with_prompt<P: PasswordPrompter>(
             let password = prompter
                 .prompt_password("Enter archive password: ")
                 .unwrap_or_default();
-            app.test_archive(archive, Some(&password))
+            run_with_bar(Some(&password))
         }
         Err(e) => Err(e),
     }
@@ -72,8 +85,20 @@ pub fn run_extract_with_prompt<P: PasswordPrompter>(
     archive: &Path,
     output: Option<&Path>,
     prompter: &P,
+    show_progress: bool,
 ) -> Result<ArchiveExtractResult> {
-    match app.extract_archive(archive, output, None) {
+    let run_with_bar = |pwd: Option<&str>| -> Result<ArchiveExtractResult> {
+        if show_progress {
+            let mut bar = crate::cli::progress::ProgressBar::new("Extracting");
+            let res = app.extract_archive_with_progress(archive, output, pwd, Some(&mut bar));
+            bar.finish();
+            res
+        } else {
+            app.extract_archive(archive, output, pwd)
+        }
+    };
+
+    match run_with_bar(None) {
         Ok(r) => Ok(r),
         Err(e @ UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
             if !prompter.is_interactive() {
@@ -82,7 +107,7 @@ pub fn run_extract_with_prompt<P: PasswordPrompter>(
             let password = prompter
                 .prompt_password("Enter archive password: ")
                 .unwrap_or_default();
-            app.extract_archive(archive, output, Some(&password))
+            run_with_bar(Some(&password))
         }
         Err(e) => Err(e),
     }
@@ -122,7 +147,8 @@ pub fn run_with_cli_and_prompter<P: PasswordPrompter>(cli: Cli, prompter: &P) ->
             Ok(())
         }
         Some(Commands::Test(args)) => {
-            let res = match run_test_with_prompt(&app, &args.archive, prompter) {
+            let show_progress = formatter.should_show_progress();
+            let res = match run_test_with_prompt(&app, &args.archive, prompter, show_progress) {
                 Ok(r) => r,
                 Err(e) => {
                     formatter.print_error(&e);
@@ -133,11 +159,13 @@ pub fn run_with_cli_and_prompter<P: PasswordPrompter>(cli: Cli, prompter: &P) ->
             Ok(())
         }
         Some(Commands::Extract(args)) => {
+            let show_progress = formatter.should_show_progress();
             let res = match run_extract_with_prompt(
                 &app,
                 &args.archive,
                 args.output.as_deref(),
                 prompter,
+                show_progress,
             ) {
                 Ok(r) => r,
                 Err(e) => {

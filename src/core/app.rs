@@ -520,6 +520,16 @@ impl Application {
 
     /// Tests the integrity of an archive.
     pub fn test_archive(&self, path: &Path, password: Option<&str>) -> Result<ArchiveTestResult> {
+        self.test_archive_with_progress(path, password, None)
+    }
+
+    /// Tests the integrity of an archive with optional real-time progress streaming.
+    pub fn test_archive_with_progress(
+        &self,
+        path: &Path,
+        password: Option<&str>,
+        progress: Option<&mut dyn crate::archive::ProgressListener>,
+    ) -> Result<ArchiveTestResult> {
         // Fail-closed enforcement check: if policy strictly mandates kernel-level sandbox confinement,
         // verify that the OS kernel sandbox is actively enforced.
         if self.security_context.policy().require_kernel_sandbox {
@@ -552,10 +562,11 @@ impl Application {
         crate::platform::signals::check_interrupted()?;
 
         // 3. Run integrity check on the primary volume within sandbox boundary
-        let mut res = match self.backend.test_with_policy(
+        let mut res = match self.backend.test_with_policy_and_progress(
             &volume_set.primary_volume,
             password,
             &sandbox_policy,
+            progress,
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -576,6 +587,17 @@ impl Application {
         path: &Path,
         output: Option<&Path>,
         password: Option<&str>,
+    ) -> Result<ArchiveExtractResult> {
+        self.extract_archive_with_progress(path, output, password, None)
+    }
+
+    /// Securely extracts an archive with optional real-time progress streaming.
+    pub fn extract_archive_with_progress(
+        &self,
+        path: &Path,
+        output: Option<&Path>,
+        password: Option<&str>,
+        progress: Option<&mut dyn crate::archive::ProgressListener>,
     ) -> Result<ArchiveExtractResult> {
         // Fail-closed enforcement check: if policy strictly mandates kernel-level sandbox confinement,
         // verify that the OS kernel sandbox is actively enforced.
@@ -667,11 +689,12 @@ impl Application {
 
         crate::platform::signals::check_interrupted()?;
 
-        let mut result = match self.backend.extract_with_policy(
+        let mut result = match self.backend.extract_with_policy_and_progress(
             &volume_set.primary_volume,
             &destination,
             password,
             &sandbox_policy,
+            progress,
         ) {
             Ok(r) => r,
             Err(e) => {

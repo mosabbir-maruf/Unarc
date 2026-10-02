@@ -176,11 +176,74 @@ impl ChildProcessGuard {
         self.child.as_ref().map(Child::id)
     }
 
-    /// Waits for the process to exit and collects output while disarming the drop-killer.
-    pub fn wait_with_output(mut self) -> std::io::Result<Output> {
-        let child = self.child.take().expect("Child process must exist");
+    /// Waits for the process to exit with streaming stderr chunks, while disarming the drop-killer.
+    pub fn wait_with_streaming<F>(
+        mut self,
+        mut on_stderr_chunk: Option<F>,
+    ) -> std::io::Result<Output>
+    where
+        F: FnMut(&[u8]) + Send,
+    {
+        let mut child = self.child.take().expect("Child process must exist");
         ACTIVE_PGID.store(0, Ordering::SeqCst);
-        child.wait_with_output()
+
+        if on_stderr_chunk.is_none() {
+            return child.wait_with_output();
+        }
+
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+
+        // Read stdout on a background thread
+        let stdout_handle = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+            let mut buf = Vec::new();
+            if let Some(mut pipe) = stdout_pipe {
+                use std::io::Read;
+                pipe.read_to_end(&mut buf)?;
+            }
+            Ok(buf)
+        });
+
+        // Read stderr on the calling thread in chunks and invoke the callback
+        let mut stderr_buf = Vec::new();
+        let mut chunk_buf = [0u8; 8192];
+        if let Some(mut pipe) = stderr_pipe {
+            use std::io::Read;
+            loop {
+                match pipe.read(&mut chunk_buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let chunk = &chunk_buf[..n];
+                        stderr_buf.extend_from_slice(chunk);
+                        if let Some(ref mut cb) = on_stderr_chunk {
+                            cb(chunk);
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        let stdout_res = stdout_handle.join().unwrap_or_else(|_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "stdout reader thread panicked",
+            ))
+        })?;
+
+        let status = child.wait()?;
+
+        Ok(Output {
+            status,
+            stdout: stdout_res,
+            stderr: stderr_buf,
+        })
+    }
+
+    /// Waits for the process to exit and collects output while disarming the drop-killer.
+    pub fn wait_with_output(self) -> std::io::Result<Output> {
+        self.wait_with_streaming::<fn(&[u8])>(None)
     }
 }
 
@@ -353,9 +416,23 @@ impl SandboxRunner {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        Self::execute_with_progress::<I, S, fn(&[u8])>(policy, args, None)
+    }
+
+    /// Executes the engine process to completion with sandboxing, streaming stderr progress chunks.
+    pub fn execute_with_progress<I, S, F>(
+        policy: &ProcessSandboxPolicy,
+        args: I,
+        progress_callback: Option<F>,
+    ) -> Result<Output, ArchiveError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+        F: FnMut(&[u8]) + Send,
+    {
         let guard = Self::spawn(policy, args)?;
         let output = guard
-            .wait_with_output()
+            .wait_with_streaming(progress_callback)
             .map_err(|e| ArchiveError::BackendFailure {
                 backend: "bundled-7zz".to_string(),
                 message: format!("Failed to read output from confined engine process: {e}"),

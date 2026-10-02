@@ -28,6 +28,31 @@ impl OutputFormatter {
         }
     }
 
+    /// Returns whether quiet mode is enabled.
+    #[must_use]
+    pub fn is_quiet(&self) -> bool {
+        self.quiet
+    }
+
+    /// Returns whether json mode is enabled.
+    #[must_use]
+    pub fn is_json(&self) -> bool {
+        self.json_mode
+    }
+
+    /// Returns whether verbose mode is enabled.
+    #[must_use]
+    pub fn is_verbose(&self) -> bool {
+        self.verbose
+    }
+
+    /// Returns whether interactive progress indicators should be displayed.
+    #[must_use]
+    pub fn should_show_progress(&self) -> bool {
+        use std::io::IsTerminal;
+        !self.quiet && !self.json_mode && std::io::stdout().is_terminal()
+    }
+
     /// Helper for conditional ANSI color styling.
     fn style<'a>(&self, text: &'a str, ansi_code: &'a str) -> std::borrow::Cow<'a, str> {
         if self.color_enabled {

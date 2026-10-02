@@ -373,10 +373,15 @@ fn prompt_and_run_test(
     let clean = clean_terminal_path(&line);
     let archive_path = PathBuf::from(clean);
 
+    let show_progress = formatter.should_show_progress();
+    if !show_progress && !formatter.is_quiet() {
+        println!("Testing archive integrity, please wait...");
+    }
     let res = crate::cli::run_test_with_prompt(
         app,
         &archive_path,
         &crate::cli::TerminalPasswordPrompter,
+        show_progress,
     )?;
     formatter.print_test_result(&res);
     Ok(())
@@ -405,11 +410,16 @@ fn prompt_and_run_extract(
         Some(Path::new(&clean_dest))
     };
 
+    let show_progress = formatter.should_show_progress();
+    if !show_progress && !formatter.is_quiet() {
+        println!("Extracting archive, please wait...");
+    }
     let res = crate::cli::run_extract_with_prompt(
         app,
         &archive_path,
         dest_opt,
         &crate::cli::TerminalPasswordPrompter,
+        show_progress,
     )?;
     formatter.print_extract_result(&res);
     Ok(())

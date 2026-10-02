@@ -44,6 +44,12 @@ pub struct ArchiveExtractResult {
     pub total_bytes_extracted: Option<u64>,
 }
 
+/// Listener receiving real-time progress events from archive operations.
+pub trait ProgressListener: Send {
+    /// Invoked whenever the progress percentage or current file updates.
+    fn on_progress(&mut self, percentage: u8, current_file: Option<&str>);
+}
+
 /// Contract for archive engine backends (e.g. bundled 7zz).
 pub trait ArchiveBackend: Send + Sync {
     /// Identifier name of the backend engine.

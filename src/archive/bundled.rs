@@ -1,6 +1,6 @@
 //! Bundled 7-Zip (7zz) archive engine integration.
 
-use super::backend::{ArchiveBackend, ArchiveExtractResult, ArchiveTestResult};
+use super::backend::{ArchiveBackend, ArchiveExtractResult, ArchiveTestResult, ProgressListener};
 use super::format::ArchiveFormat;
 use super::metadata::{ArchiveEntry, ArchiveMetadata};
 use crate::error::ArchiveError;
@@ -95,6 +95,116 @@ pub fn resolve_bundled_engine() -> Result<PathBuf, ArchiveError> {
 #[derive(Debug, Default, Clone)]
 pub struct SevenZipBackend;
 
+/// Stateful parser for 7-Zip progress streams (`-bsp2`).
+#[derive(Debug, Default)]
+pub struct SevenZipProgressParser {
+    buf: Vec<u8>,
+}
+
+impl SevenZipProgressParser {
+    /// Creates a new progress parser instance.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            buf: Vec::with_capacity(256),
+        }
+    }
+
+    /// Feeds a chunk from the 7zz stderr stream and invokes callback for each detected percentage update.
+    pub fn feed<F>(&mut self, chunk: &[u8], mut callback: F)
+    where
+        F: FnMut(u8, Option<&str>),
+    {
+        self.buf.extend_from_slice(chunk);
+        let mut i = 0;
+        let mut last_matched_end = 0;
+
+        while let Some(rel_pct) = self.buf[i..].iter().position(|&b| b == b'%') {
+            let pct_idx = i + rel_pct;
+
+            // Search backwards for 1-3 digits
+            let mut start = pct_idx;
+            while start > 0 && self.buf[start - 1].is_ascii_digit() {
+                start -= 1;
+            }
+
+            if start < pct_idx && (pct_idx - start) <= 3 {
+                if let Ok(pct_str) = std::str::from_utf8(&self.buf[start..pct_idx]) {
+                    if let Ok(pct) = pct_str.parse::<u8>() {
+                        if pct <= 100 {
+                            // Search forwards for filename up to \x08, \r, \n, or null
+                            let mut fwd = pct_idx + 1;
+                            while fwd < self.buf.len() && self.buf[fwd] == b' ' {
+                                fwd += 1;
+                            }
+
+                            // Skip action code or item counter if present (e.g. "- ", "T ", "10 ")
+                            if fwd < self.buf.len() {
+                                let mut code_end = fwd;
+                                while code_end < self.buf.len()
+                                    && (self.buf[code_end] == b'-'
+                                        || self.buf[code_end] == b'+'
+                                        || self.buf[code_end] == b'T'
+                                        || self.buf[code_end] == b'U'
+                                        || self.buf[code_end] == b'R'
+                                        || self.buf[code_end].is_ascii_digit())
+                                {
+                                    code_end += 1;
+                                }
+                                if code_end > fwd
+                                    && code_end < self.buf.len()
+                                    && self.buf[code_end] == b' '
+                                {
+                                    fwd = code_end + 1;
+                                    while fwd < self.buf.len() && self.buf[fwd] == b' ' {
+                                        fwd += 1;
+                                    }
+                                }
+                            }
+
+                            let name_start = fwd;
+                            while fwd < self.buf.len()
+                                && self.buf[fwd] != 8
+                                && self.buf[fwd] != b'\r'
+                                && self.buf[fwd] != b'\n'
+                                && self.buf[fwd] != 0
+                            {
+                                fwd += 1;
+                            }
+
+                            let current_file = if fwd > name_start {
+                                let raw = String::from_utf8_lossy(&self.buf[name_start..fwd]);
+                                let trimmed = raw.trim();
+                                if !trimmed.is_empty() {
+                                    Some(trimmed.to_string())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            callback(pct, current_file.as_deref());
+                            i = fwd;
+                            last_matched_end = fwd;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            i = pct_idx + 1;
+        }
+
+        if last_matched_end > 0 {
+            self.buf.drain(..last_matched_end);
+        } else if self.buf.len() > 128 {
+            let keep_from = self.buf.len() - 128;
+            self.buf.drain(..keep_from);
+        }
+    }
+}
+
 impl SevenZipBackend {
     /// Creates a new bundled 7zz backend instance.
     #[must_use]
@@ -142,6 +252,17 @@ impl SevenZipBackend {
         password: Option<&str>,
         policy: &ProcessSandboxPolicy,
     ) -> Result<ArchiveTestResult, ArchiveError> {
+        self.test_with_policy_and_progress(path, password, policy, None)
+    }
+
+    /// Tests the integrity of an archive confined by the given sandbox policy, with optional progress streaming.
+    pub fn test_with_policy_and_progress(
+        &self,
+        path: &Path,
+        password: Option<&str>,
+        policy: &ProcessSandboxPolicy,
+        mut progress: Option<&mut dyn ProgressListener>,
+    ) -> Result<ArchiveTestResult, ArchiveError> {
         if !path.exists() {
             return Err(ArchiveError::FileNotFound {
                 path: path.to_string_lossy().to_string(),
@@ -157,6 +278,10 @@ impl SevenZipBackend {
             "-bse2".to_string(),
         ];
 
+        if progress.is_some() {
+            args.push("-bsp2".to_string());
+        }
+
         if let Some(pwd) = password {
             args.push(format!("-p{pwd}"));
         } else {
@@ -165,7 +290,18 @@ impl SevenZipBackend {
 
         args.push(path.to_string_lossy().to_string());
 
-        let output = self.execute_with_policy(&args, policy)?;
+        let output = if let Some(ref mut cb) = progress {
+            let mut parser = SevenZipProgressParser::new();
+            SandboxRunner::execute_with_progress(
+                policy,
+                &args,
+                Some(move |chunk: &[u8]| {
+                    parser.feed(chunk, |pct, file| cb.on_progress(pct, file));
+                }),
+            )?
+        } else {
+            self.execute_with_policy(&args, policy)?
+        };
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let combined = format!("{stdout}\n{stderr}");
@@ -253,6 +389,18 @@ impl SevenZipBackend {
         password: Option<&str>,
         policy: &ProcessSandboxPolicy,
     ) -> Result<ArchiveExtractResult, ArchiveError> {
+        self.extract_with_policy_and_progress(path, destination, password, policy, None)
+    }
+
+    /// Extracts an archive into the destination directory confined by the given sandbox policy, with optional progress streaming.
+    pub fn extract_with_policy_and_progress(
+        &self,
+        path: &Path,
+        destination: &Path,
+        password: Option<&str>,
+        policy: &ProcessSandboxPolicy,
+        mut progress: Option<&mut dyn ProgressListener>,
+    ) -> Result<ArchiveExtractResult, ArchiveError> {
         if !path.exists() {
             return Err(ArchiveError::FileNotFound {
                 path: path.to_string_lossy().to_string(),
@@ -282,6 +430,10 @@ impl SevenZipBackend {
             "-bse2".to_string(),
         ];
 
+        if progress.is_some() {
+            args.push("-bsp2".to_string());
+        }
+
         if let Some(pwd) = password {
             args.push(format!("-p{pwd}"));
         } else {
@@ -290,7 +442,18 @@ impl SevenZipBackend {
 
         args.push(path.to_string_lossy().to_string());
 
-        let output = self.execute_with_policy(&args, policy)?;
+        let output = if let Some(ref mut cb) = progress {
+            let mut parser = SevenZipProgressParser::new();
+            SandboxRunner::execute_with_progress(
+                policy,
+                &args,
+                Some(move |chunk: &[u8]| {
+                    parser.feed(chunk, |pct, file| cb.on_progress(pct, file));
+                }),
+            )?
+        } else {
+            self.execute_with_policy(&args, policy)?
+        };
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let combined = format!("{stdout}\n{stderr}");
@@ -603,5 +766,30 @@ mod tests {
 
         std::env::remove_var("UNARC_BUNDLED_7ZZ");
         let _ = std::fs::remove_file(fake_7zz);
+    }
+
+    #[test]
+    fn test_seven_zip_progress_parser() {
+        let mut parser = SevenZipProgressParser::new();
+        let mut updates = Vec::new();
+
+        // Feed split chunks simulating real 7zz progress stream
+        parser.feed(b"  0M Scan /tmp/\x08\x08  4", |pct, f| {
+            updates.push((pct, f.map(String::from)));
+        });
+        assert!(updates.is_empty());
+
+        parser.feed(b"5% - eboot.bin\x08\x08 5", |pct, f| {
+            updates.push((pct, f.map(String::from)));
+        });
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0], (45, Some("eboot.bin".to_string())));
+
+        parser.feed(b"0% T test_file.pkg\x08\x08 100%\x08\x08", |pct, f| {
+            updates.push((pct, f.map(String::from)));
+        });
+        assert_eq!(updates.len(), 3);
+        assert_eq!(updates[1], (50, Some("test_file.pkg".to_string())));
+        assert_eq!(updates[2], (100, None));
     }
 }

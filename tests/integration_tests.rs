@@ -7,8 +7,7 @@ use unarc::archive::bundled::{
 };
 use unarc::cli::args::{Cli, Commands, ExtractArgs, TestArgs};
 use unarc::cli::interactive::{execute_interactive_command, filter_suggestions};
-use unarc::cli::output::OutputFormatter;
-use unarc::cli::run_with_cli;
+use unarc::cli::{run_with_cli, run_with_cli_and_prompter, OutputFormatter, PasswordPrompter};
 use unarc::core::Application;
 use unarc::error::{ArchiveError, ErrorCode, UnarcError};
 use unarc::security::{
@@ -1650,4 +1649,259 @@ fn test_phase5_exit_code_permission_denied() {
             assert_eq!(err.exit_code(), 30);
         }
     }
+}
+
+struct TestMockPrompter {
+    interactive: bool,
+    password: String,
+    prompt_called: std::sync::atomic::AtomicBool,
+}
+
+impl PasswordPrompter for TestMockPrompter {
+    fn is_interactive(&self) -> bool {
+        self.interactive
+    }
+
+    fn prompt_password(&self, _prompt: &str) -> std::io::Result<String> {
+        self.prompt_called
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.password.clone())
+    }
+}
+
+#[test]
+fn test_phase5_regression_encrypted_interactive_stdin_prompt_path() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample_file = temp_dir.join("p5_reg_secret.txt");
+    std::fs::write(&sample_file, b"prompt path content").unwrap();
+
+    let enc_archive = temp_dir.join("p5_reg_prompt.7z");
+    let out_dir = temp_dir.join("p5_reg_prompt_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            "-pPromptPass123",
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    let prompter = TestMockPrompter {
+        interactive: true,
+        password: "PromptPass123".to_string(),
+        prompt_called: std::sync::atomic::AtomicBool::new(false),
+    };
+
+    let cli = Cli {
+        json: false,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: enc_archive.clone(),
+            output: Some(out_dir.clone()),
+        })),
+    };
+
+    let res = run_with_cli_and_prompter(cli, &prompter);
+    assert!(res.is_ok());
+    assert!(prompter
+        .prompt_called
+        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(out_dir.join("p5_reg_secret.txt").exists());
+
+    let _ = std::fs::remove_file(&sample_file);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_phase5_regression_encrypted_non_tty_closed_stdin_immediate_failure() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample_file = temp_dir.join("p5_reg_secret_nontty.txt");
+    std::fs::write(&sample_file, b"non-tty secret content").unwrap();
+
+    let enc_archive = temp_dir.join("p5_reg_nontty.7z");
+    let out_dir = temp_dir.join("p5_reg_nontty_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            "-pAnyPass",
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    let prompter = TestMockPrompter {
+        interactive: false,
+        password: "AnyPass".to_string(),
+        prompt_called: std::sync::atomic::AtomicBool::new(false),
+    };
+
+    let cli = Cli {
+        json: false,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: enc_archive.clone(),
+            output: Some(out_dir.clone()),
+        })),
+    };
+
+    // Must return PASSWORD_REQUIRED immediately without calling prompt
+    let res = run_with_cli_and_prompter(cli, &prompter);
+    assert!(res.is_err());
+    assert!(!prompter
+        .prompt_called
+        .load(std::sync::atomic::Ordering::SeqCst));
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::PasswordRequired);
+    assert_eq!(err.exit_code(), 16);
+
+    let _ = std::fs::remove_file(&sample_file);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_phase5_regression_encrypted_invalid_password_returns_code_17() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample_file = temp_dir.join("p5_reg_secret_invalid.txt");
+    std::fs::write(&sample_file, b"invalid pass content").unwrap();
+
+    let enc_archive = temp_dir.join("p5_reg_invalid.7z");
+    let out_dir = temp_dir.join("p5_reg_invalid_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            "-pRightPassword",
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    let prompter = TestMockPrompter {
+        interactive: true,
+        password: "WrongPassword999".to_string(),
+        prompt_called: std::sync::atomic::AtomicBool::new(false),
+    };
+
+    let cli = Cli {
+        json: false,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: enc_archive.clone(),
+            output: Some(out_dir.clone()),
+        })),
+    };
+
+    let res = run_with_cli_and_prompter(cli, &prompter);
+    assert!(res.is_err());
+    assert!(prompter
+        .prompt_called
+        .load(std::sync::atomic::Ordering::SeqCst));
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::InvalidPassword);
+    assert_eq!(err.exit_code(), 17);
+
+    let _ = std::fs::remove_file(&sample_file);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_phase5_regression_no_process_hang_bounded_termination_time() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample_file = temp_dir.join("p5_reg_secret_time.txt");
+    std::fs::write(&sample_file, b"bounded time content").unwrap();
+
+    let enc_archive = temp_dir.join("p5_reg_time.7z");
+    let out_dir = temp_dir.join("p5_reg_time_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            "-pSecretTimeout",
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    // Non-interactive execution must terminate boundedly in < 2 seconds
+    let start = std::time::Instant::now();
+
+    // Use default run_with_cli which uses TerminalPasswordPrompter.
+    // In automated test harness stdin is non-terminal, so it must return immediately.
+    let cli = Cli {
+        json: false,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Test(TestArgs {
+            archive: enc_archive.clone(),
+        })),
+    };
+
+    let res = run_with_cli(cli);
+    let elapsed = start.elapsed();
+
+    assert!(elapsed < std::time::Duration::from_secs(2));
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::PasswordRequired);
+    assert_eq!(err.exit_code(), 16);
+
+    let _ = std::fs::remove_file(&sample_file);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
 }

@@ -335,8 +335,12 @@ fn prompt_and_run_test(
             formatter.print_test_result(&res);
             Ok(())
         }
-        Err(crate::error::UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
-            // Prompt for password interactively
+        Err(e @ crate::error::UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
+            // Prompt for password interactively only if stdin is a real terminal
+            use std::io::IsTerminal;
+            if !std::io::stdin().is_terminal() {
+                return Err(e);
+            }
             let password =
                 rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
             let res = app.test_archive(&archive_path, Some(&password))?;
@@ -375,7 +379,11 @@ fn prompt_and_run_extract(
             formatter.print_extract_result(&res);
             Ok(())
         }
-        Err(crate::error::UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
+        Err(e @ crate::error::UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
+            use std::io::IsTerminal;
+            if !std::io::stdin().is_terminal() {
+                return Err(e);
+            }
             let password =
                 rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
             let res = app.extract_archive(&archive_path, dest_opt, Some(&password))?;

@@ -487,24 +487,30 @@ impl Application {
         }
     }
 
-    /// Validates that the input archive path exists and is a regular file.
+    /// Validates that the input archive path exists and is a regular file using a single filesystem probe.
     fn validate_input_archive_file(&self, path: &Path) -> Result<std::fs::Metadata> {
-        if !path.exists() {
-            return Err(ArchiveError::FileNotFound {
-                path: path.to_string_lossy().to_string(),
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ArchiveError::FileNotFound {
+                    path: path.to_string_lossy().to_string(),
+                }
+                .into());
             }
-            .into());
-        }
+            Err(e) => return Err(UnarcError::Io(e)),
+        };
 
-        let meta = std::fs::symlink_metadata(path).map_err(UnarcError::Io)?;
         if !meta.is_file() {
+            let reason = if meta.is_dir() {
+                "path is a directory"
+            } else if meta.file_type().is_symlink() {
+                "path is a symbolic link"
+            } else {
+                "path is not a regular file"
+            };
             return Err(ArchiveError::InputNotFile {
                 path: path.to_string_lossy().to_string(),
-                reason: if meta.is_dir() {
-                    "path is a directory".to_string()
-                } else {
-                    "path is not a regular file".to_string()
-                },
+                reason: reason.to_string(),
             }
             .into());
         }
@@ -621,12 +627,14 @@ impl Application {
             std::env::current_dir()?.join(clean_stem)
         };
 
-        if destination.exists() && !destination.is_dir() {
-            return Err(ArchiveError::OutputInvalid {
-                path: destination.display().to_string(),
-                reason: "Destination exists but is not a directory".to_string(),
+        if let Ok(dest_meta) = std::fs::metadata(&destination) {
+            if !dest_meta.is_dir() {
+                return Err(ArchiveError::OutputInvalid {
+                    path: destination.display().to_string(),
+                    reason: "Destination exists but is not a directory".to_string(),
+                }
+                .into());
             }
-            .into());
         }
 
         // 3. Pre-extract security inspection:
@@ -653,7 +661,6 @@ impl Application {
 
         // 4. Extract through bundled engine backend under OS-level confinement
         let scratch = ScratchWorkspace::new()?;
-        let engine_path = resolve_bundled_engine()?;
         let sandbox_policy = ProcessSandboxPolicy::new(engine_path, scratch.path().to_path_buf())
             .with_inputs(volume_set.volumes.clone())
             .with_destination(destination.clone());
@@ -717,8 +724,8 @@ impl Application {
             for entry_res in read_dir {
                 crate::platform::signals::check_interrupted()?;
                 let entry = entry_res?;
+                let symlink_meta = entry.metadata()?;
                 let path = entry.path();
-                let symlink_meta = std::fs::symlink_metadata(&path)?;
 
                 // Reject any created symlinks if policy forbids symlinks
                 if symlink_meta.file_type().is_symlink()

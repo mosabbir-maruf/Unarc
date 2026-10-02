@@ -379,19 +379,21 @@ impl VolumeResolver {
         selected_path: &Path,
         policy: &SecurityPolicy,
     ) -> Result<VolumeSet, ArchiveError> {
-        // 1. Validate selected input path exists
-        if !selected_path.exists() {
-            return Err(ArchiveError::FileNotFound {
-                path: selected_path.to_string_lossy().to_string(),
-            });
-        }
-
-        // 2. Validate selected path is a regular file
-        let metadata =
-            std::fs::symlink_metadata(selected_path).map_err(|e| ArchiveError::InvalidVolume {
-                path: selected_path.display().to_string(),
-                reason: format!("Failed to read metadata: {e}"),
-            })?;
+        // 1. Validate selected input path exists and inspect metadata in a single probe
+        let metadata = match std::fs::symlink_metadata(selected_path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ArchiveError::FileNotFound {
+                    path: selected_path.to_string_lossy().to_string(),
+                });
+            }
+            Err(e) => {
+                return Err(ArchiveError::InvalidVolume {
+                    path: selected_path.display().to_string(),
+                    reason: format!("Failed to read metadata: {e}"),
+                });
+            }
+        };
 
         if metadata.file_type().is_symlink() && !policy.allow_symlinks {
             return Err(ArchiveError::InvalidVolume {

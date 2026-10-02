@@ -1,0 +1,30 @@
+[package]
+name = "unarc"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85.0"
+description = "Production-grade, security-focused archive utility"
+authors = ["Unarc Contributors"]
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[lib]
+name = "unarc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "unarc"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

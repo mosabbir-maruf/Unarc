@@ -1,0 +1,21 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+Cargo.lock.backup
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor & IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Scratch & temporary files
+tmp/
+temp/
+*.log

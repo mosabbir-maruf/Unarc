@@ -16,12 +16,12 @@ This document tracks the final production release verification and readiness sta
 | **Network Isolation** | **PASS** | Engine subprocess network operations denied by confinement policy; runtime doctor network denial probe verified; Docker runtime verified with `--network none`. |
 | **Password Safety** | **PASS** | Masked interactive terminal input without echo (`rpassword`); immediate non-interactive exit with code 16 (`PASSWORD_REQUIRED`) on non-TTY stdin; zero environment variable or CLI flag secret inputs; zero secret logging. |
 | **Engine Integrity** | **PASS** | Authentic pinned 7-Zip engine (`v26.03`); expected SHA-256 verified at build time and dynamically by `unarc doctor`; engine resolution strictly hermetic (no PATH searches, no runtime downloads). |
-| **Updater Integrity** | **PASS** | Explicit cryptographic self-update (`unarc update`) verified via Ed25519 digital signature against embedded official trust anchor (`69ac4dbc...`); Mach-O / ELF binary header validation; same-filesystem staging; atomic POSIX `rename(2)` with RAII rollback guard; symlinked target paths rejected. |
+| **Updater Integrity** | **PASS** | Explicit cryptographic self-update (`unarc update`) verified via Ed25519 digital signature against embedded official trust anchor (`90cd97dbf43425cb694d386cb89f2e04fa252fafa6bffddddfc2f3fc962a94ee`); Mach-O / ELF binary header validation; same-filesystem staging; atomic POSIX `rename(2)` with RAII rollback guard; symlinked target paths rejected. |
 | **Docker Hardening** | **PASS** | Minimal distroless base (`gcr.io/distroless/cc-debian12:nonroot`); non-root user `65532:65532`; zero compilers, interpreters, dev tools, or shell binaries; verified under `--network none`, `--read-only`, `--cap-drop ALL`, `-v /input:ro`, `-v /output:rw` (8/8 checks passed in `scripts/verify-docker.sh`). |
 | **Release Signing** | **PASS** | Dedicated `unarc-sign` tool with `--strict` mode failing closed (exit code 1) when `RELEASE_SIGNING_KEY` is missing or empty; private key injected strictly via GitHub Actions secrets; zero private keys committed or logged. |
 | **Licensing** | **PASS** | Unarc project is licensed under MIT (`LICENSE`); third-party notices and 7-Zip LGPL / unRAR license distinctions preserved in `THIRD-PARTY-NOTICES.md`; canonical notice file included in distributed release archives. |
 | **Documentation** | **PASS** | Complete and accurate documentation across `README.md`, `ARCHITECTURE.md`, `SECURITY.md`, `CONTRIBUTING.md`, and `RELEASE_READINESS.md`. All CLI commands, options, and interactive slash commands verified against actual implementation. |
-| **Tests** | **PASS** | 110 automated tests passing (46 unit + 64 integration); `cargo fmt --check` clean; `cargo clippy -- -D warnings` passing with 0 warnings; Gitleaks secret scan passing with 0 leaks found. |
+| **Tests** | **PASS** | 113 automated tests passing (49 unit + 64 integration); `cargo fmt --check` clean; `cargo clippy -- -D warnings` passing with 0 warnings; Gitleaks secret scan passing with 0 leaks found. |
 | **Artifact Contents** | **PASS** | Release bundles contain only authentic binaries (`unarc`, `7zz`) and documentation (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `README.md`). Zero source files, dev caches, build artifacts, or secret material present. |
 
 ---
@@ -29,7 +29,7 @@ This document tracks the final production release verification and readiness sta
 ## Verification Scope & Boundary
 
 - **Locally Verified & Emulated**:
-  - All unit and integration tests (110 tests).
+  - All unit and integration tests (113 tests).
   - Code formatting and Clippy strict checks (0 warnings).
   - Native macOS Apple Silicon compilation, doctor probes, and extraction smoke tests.
   - OS-level security boundary checks (7/7 checks).
@@ -37,9 +37,10 @@ This document tracks the final production release verification and readiness sta
   - Release packaging, SHA-256 checksum generation, and Ed25519 manifest verification.
   - Containerized GitHub Actions workflow linting (`actionlint`).
   - Containerized secret scanning (`gitleaks`).
-- **Owner-Only Final Deployment Steps (Not Automatically Executed)**:
-  - Configure `RELEASE_SIGNING_KEY` secret in GitHub repository settings.
+- **Completed v0.2.0 Release Deployment Verifications**:
+  - `RELEASE_SIGNING_KEY` secret configured in GitHub repository settings.
+  - Official public key pinned in runtime (`90cd97dbf43425cb694d386cb89f2e04fa252fafa6bffddddfc2f3fc962a94ee`).
   - Legal owner identity configured in `LICENSE` (`Mosabbir Maruf`).
   - Security policy configured in `SECURITY.md` (GitHub Private Vulnerability Reporting).
-  - Push release tag (`v0.2.0`) to trigger GitHub Actions release pipeline.
-  - Review and publish official GitHub Release and GHCR container package.
+  - Production release pipeline executed for `v0.2.0` release tag.
+  - Official GitHub Release and GHCR container package published.

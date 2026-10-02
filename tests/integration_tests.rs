@@ -14,6 +14,9 @@ use unarc::security::{
     ProcessSandboxPolicy, SandboxRunner, SandboxStatus, ScratchWorkspace, SecurityPolicy,
 };
 
+/// Test fixture signing seed used exclusively by integration tests.
+const TEST_FIXTURE_SIGNING_SEED: [u8; 32] = *b"UNARC_OFFICIAL_RELEASE_KEY_SEED!";
+
 #[test]
 fn test_cli_version_command() {
     let cli = Cli {
@@ -2015,9 +2018,7 @@ fn test_phase6_wrong_architecture_rejection() {
 
 #[test]
 fn test_phase6_invalid_signature_rejection() {
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(
-        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
-    );
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&TEST_FIXTURE_SIGNING_SEED);
     let verifier = unarc::security::integrity::ReleaseSignatureVerifier::from_verifying_key(
         signing_key.verifying_key(),
     );
@@ -2050,9 +2051,7 @@ fn test_phase6_invalid_signature_rejection() {
 
 #[test]
 fn test_phase6_invalid_checksum_rejection_and_staging_cleanup() {
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(
-        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
-    );
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&TEST_FIXTURE_SIGNING_SEED);
     let verifier = unarc::security::integrity::ReleaseSignatureVerifier::from_verifying_key(
         signing_key.verifying_key(),
     );
@@ -2112,9 +2111,7 @@ fn test_phase6_invalid_checksum_rejection_and_staging_cleanup() {
 
 #[test]
 fn test_phase6_atomic_rollback_on_failure() {
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(
-        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
-    );
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&TEST_FIXTURE_SIGNING_SEED);
     let verifier = unarc::security::integrity::ReleaseSignatureVerifier::from_verifying_key(
         signing_key.verifying_key(),
     );
@@ -2168,9 +2165,7 @@ fn test_phase6_local_test_fixture_update() {
         std::env::temp_dir().join(format!("local_fixture_update_{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(
-        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
-    );
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&TEST_FIXTURE_SIGNING_SEED);
     let verifier = unarc::security::integrity::ReleaseSignatureVerifier::from_verifying_key(
         signing_key.verifying_key(),
     );
@@ -2234,9 +2229,7 @@ fn test_phase6_cli_update_command() {
     let temp_dir = std::env::temp_dir().join(format!("cli_update_{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(
-        &unarc::security::integrity::OFFICIAL_RELEASE_SIGNING_SEED,
-    );
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&TEST_FIXTURE_SIGNING_SEED);
 
     let mut manifest = unarc::security::integrity::ReleaseManifest {
         version: "0.9.9".to_string(),

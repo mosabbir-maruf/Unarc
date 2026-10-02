@@ -405,10 +405,10 @@ impl<T: DownloadTransport> UpdateManager<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::integrity::{
-        expected_engine_binary_sha256, OFFICIAL_RELEASE_SIGNING_SEED,
-    };
+    use crate::security::integrity::expected_engine_binary_sha256;
     use ed25519_dalek::SigningKey;
+
+    const TEST_RELEASE_SIGNING_SEED: [u8; 32] = *b"UNARC_OFFICIAL_RELEASE_KEY_SEED!";
 
     #[test]
     fn test_version_newer_logic() {
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_mock_update_flow() {
-        let signing_key = SigningKey::from_bytes(&OFFICIAL_RELEASE_SIGNING_SEED);
+        let signing_key = SigningKey::from_bytes(&TEST_RELEASE_SIGNING_SEED);
         let verifier = ReleaseSignatureVerifier::from_verifying_key(signing_key.verifying_key());
 
         // Create dummy valid executable binary for current OS

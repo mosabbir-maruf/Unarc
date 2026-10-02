@@ -184,15 +184,14 @@ impl ChildProcessGuard {
     where
         F: FnMut(&[u8]) + Send,
     {
-        let mut child = self.child.take().expect("Child process must exist");
-        ACTIVE_PGID.store(0, Ordering::SeqCst);
-
         if on_stderr_chunk.is_none() {
+            let child = self.child.take().expect("Child process must exist");
+            ACTIVE_PGID.store(0, Ordering::SeqCst);
             return child.wait_with_output();
         }
 
-        let stdout_pipe = child.stdout.take();
-        let stderr_pipe = child.stderr.take();
+        let stdout_pipe = self.child.as_mut().and_then(|c| c.stdout.take());
+        let stderr_pipe = self.child.as_mut().and_then(|c| c.stderr.take());
 
         // Read stdout on a background thread
         let stdout_handle = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
@@ -207,6 +206,7 @@ impl ChildProcessGuard {
         // Read stderr on the calling thread in chunks and invoke the callback
         let mut stderr_buf = Vec::new();
         let mut chunk_buf = [0u8; 8192];
+        let mut stderr_err = None;
         if let Some(mut pipe) = stderr_pipe {
             use std::io::Read;
             loop {
@@ -220,7 +220,10 @@ impl ChildProcessGuard {
                         }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        stderr_err = Some(e);
+                        break;
+                    }
                 }
             }
         }
@@ -230,13 +233,20 @@ impl ChildProcessGuard {
                 std::io::ErrorKind::Other,
                 "stdout reader thread panicked",
             ))
-        })?;
+        });
 
+        let mut child = self.child.take().expect("Child process must exist");
+        ACTIVE_PGID.store(0, Ordering::SeqCst);
         let status = child.wait()?;
+
+        if let Some(err) = stderr_err {
+            return Err(err);
+        }
+        let stdout_bytes = stdout_res?;
 
         Ok(Output {
             status,
-            stdout: stdout_res,
+            stdout: stdout_bytes,
             stderr: stderr_buf,
         })
     }

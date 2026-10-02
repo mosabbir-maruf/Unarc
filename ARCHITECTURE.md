@@ -356,7 +356,7 @@ Unarc formalizes a stable taxonomy of 16 structured error codes mapped to determ
 
 ### Decision 6: GHCR Image Tagging & Automated Retention
 - **Semantic Version Tags**:
-  - `ghcr.io/<owner>/unarc:<version>` serves as the immutable release identity.
+  - `ghcr.io/mosabbir-maruf/unarc:<version>` serves as the immutable release identity.
   - `latest` and major/minor tags (`0.2`) are provided exclusively as convenience pointers and never as integrity anchors.
 - **Automated Retention**:
   - CI policy prunes untagged and older image tags, retaining the latest two semantic release versions to prevent unbounded registry bloat.

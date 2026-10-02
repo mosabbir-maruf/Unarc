@@ -25,10 +25,6 @@ pub const EXPECTED_ENGINE_BINARY_SHA256_LINUX_X64: &str =
 pub const OFFICIAL_RELEASE_PUBLIC_KEY_HEX: &str =
     "90cd97dbf43425cb694d386cb89f2e04fa252fafa6bffddddfc2f3fc962a94ee";
 
-/// Test signing seed used exclusively by integration test fixtures.
-/// Production release signing keys are injected exclusively via CI secrets.
-pub const OFFICIAL_RELEASE_SIGNING_SEED: [u8; 32] = *b"UNARC_OFFICIAL_RELEASE_KEY_SEED!";
-
 /// Returns the expected SHA-256 hash of the bundled 7zz binary on the current platform.
 #[must_use]
 pub fn expected_engine_binary_sha256() -> &'static str {
@@ -455,9 +451,11 @@ mod tests {
         assert!(manifest.verify_current_identity().is_ok());
     }
 
+    const TEST_RELEASE_SIGNING_SEED: [u8; 32] = *b"UNARC_OFFICIAL_RELEASE_KEY_SEED!";
+
     #[test]
     fn test_ed25519_sign_and_verify() {
-        let signing_key = SigningKey::from_bytes(&OFFICIAL_RELEASE_SIGNING_SEED);
+        let signing_key = SigningKey::from_bytes(&TEST_RELEASE_SIGNING_SEED);
         let verifier = ReleaseSignatureVerifier::from_verifying_key(signing_key.verifying_key());
 
         let mut manifest = ReleaseManifest {

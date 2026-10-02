@@ -290,8 +290,8 @@ Every release manifest is cryptographically signed using Unarc's release key. Th
 ## Update Behavior & Topology
 
 - **Native Binaries (`unarc update`)**:
-  - `unarc update --check`: Inquires configured release source for newer versions.
-  - `unarc update`: Downloads release manifest, verifies Ed25519 signature against the embedded trust anchor, verifies SHA-256 checksum and executable format (Mach-O / ELF), stages adjacent in target directory, and atomically replaces the binary via `rename(2)` with RAII rollback protection.
+  - `unarc update --check`: Inquires configured release source (`https://github.com/mosabbir-maruf/Unarc/releases/latest/download`) for newer versions.
+  - `unarc update`: Downloads release manifest from the official repository (`https://github.com/mosabbir-maruf/Unarc/releases/latest/download`), verifies Ed25519 signature against the embedded trust anchor, verifies SHA-256 checksum and executable format (Mach-O / ELF), stages adjacent in target directory, and atomically replaces the binary via `rename(2)` with RAII rollback protection.
   - Rejects updating through symlinks (`ErrorCode::UnsafeEntry`, exit code 21).
 - **Container Deployments**:
   - Docker containers are immutable. In-place self-update (`unarc update`) is not supported and should not be used inside containers.
@@ -318,6 +318,6 @@ Every release manifest is cryptographically signed using Unarc's release key. Th
 
 Unarc is open-source software licensed under the **[MIT License](LICENSE)**.
 
-- **Unarc Codebase**: Licensed under the MIT License (see [LICENSE](LICENSE)). Copyright (c) 2026 Unarc Contributors.
+- **Unarc Codebase**: Licensed under the MIT License (see [LICENSE](LICENSE)). Copyright (c) 2026 Mosabbir Maruf.
 - **Bundled Engine (7-Zip / 7zz)**: Pinned 7-Zip (`7zz v26.03`) is developed by Igor Pavlov and is separately licensed under the **GNU LGPL v2.1+** (with the unRAR license restriction for RAR archive decompression and BSD/Public Domain portions for LZMA and 7z components). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details and full license terms.
 - **Third-Party Dependencies**: All third-party Rust libraries retain their original permissive licenses (MIT, Apache-2.0, BSD-3-Clause). Complete notices and dependency attributions are available in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

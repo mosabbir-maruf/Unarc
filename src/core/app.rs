@@ -487,23 +487,8 @@ impl Application {
         }
     }
 
-    /// Tests the integrity of an archive.
-    pub fn test_archive(&self, path: &Path, password: Option<&str>) -> Result<ArchiveTestResult> {
-        // Fail-closed enforcement check: if policy strictly mandates kernel-level sandbox confinement,
-        // verify that the OS kernel sandbox is actively enforced.
-        if self.security_context.policy().require_kernel_sandbox {
-            let status = SandboxRunner::probe_status();
-            if status != SandboxStatus::Enforced {
-                return Err(crate::error::SecurityError::PolicyViolation {
-                    reason: format!(
-                        "require_kernel_sandbox violation: strict kernel sandbox is required by security policy, but current status is {:?}",
-                        status
-                    ),
-                }
-                .into());
-            }
-        }
-
+    /// Validates that the input archive path exists and is a regular file.
+    fn validate_input_archive_file(&self, path: &Path) -> Result<std::fs::Metadata> {
         if !path.exists() {
             return Err(ArchiveError::FileNotFound {
                 path: path.to_string_lossy().to_string(),
@@ -523,6 +508,28 @@ impl Application {
             }
             .into());
         }
+
+        Ok(meta)
+    }
+
+    /// Tests the integrity of an archive.
+    pub fn test_archive(&self, path: &Path, password: Option<&str>) -> Result<ArchiveTestResult> {
+        // Fail-closed enforcement check: if policy strictly mandates kernel-level sandbox confinement,
+        // verify that the OS kernel sandbox is actively enforced.
+        if self.security_context.policy().require_kernel_sandbox {
+            let status = SandboxRunner::probe_status();
+            if status != SandboxStatus::Enforced {
+                return Err(crate::error::SecurityError::PolicyViolation {
+                    reason: format!(
+                        "require_kernel_sandbox violation: strict kernel sandbox is required by security policy, but current status is {:?}",
+                        status
+                    ),
+                }
+                .into());
+            }
+        }
+
+        self.validate_input_archive_file(path)?;
 
         // 1. Deterministic volume sequence resolution
         let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
@@ -579,25 +586,7 @@ impl Application {
             }
         }
 
-        if !path.exists() {
-            return Err(ArchiveError::FileNotFound {
-                path: path.to_string_lossy().to_string(),
-            }
-            .into());
-        }
-
-        let meta = std::fs::symlink_metadata(path).map_err(UnarcError::Io)?;
-        if !meta.is_file() {
-            return Err(ArchiveError::InputNotFile {
-                path: path.to_string_lossy().to_string(),
-                reason: if meta.is_dir() {
-                    "path is a directory".to_string()
-                } else {
-                    "path is not a regular file".to_string()
-                },
-            }
-            .into());
-        }
+        self.validate_input_archive_file(path)?;
 
         // 1. Deterministic volume resolution (fails immediately on missing or invalid volumes)
         let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
@@ -798,25 +787,7 @@ impl Application {
 
     /// Inspects an archive on the filesystem, detecting format and extracting file metadata.
     pub fn inspect_archive(&self, path: &Path) -> Result<ArchiveMetadata> {
-        if !path.exists() {
-            return Err(ArchiveError::FileNotFound {
-                path: path.to_string_lossy().to_string(),
-            }
-            .into());
-        }
-
-        let file_meta = std::fs::symlink_metadata(path)?;
-        if !file_meta.is_file() {
-            return Err(ArchiveError::InputNotFile {
-                path: path.to_string_lossy().to_string(),
-                reason: if file_meta.is_dir() {
-                    "path is a directory".to_string()
-                } else {
-                    "path is not a regular file".to_string()
-                },
-            }
-            .into());
-        }
+        let file_meta = self.validate_input_archive_file(path)?;
 
         let file_size = file_meta.len();
 

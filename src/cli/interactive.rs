@@ -1,7 +1,6 @@
 //! Terminal-native interactive shell and suggestion engine.
 
 use crate::core::Application;
-use crate::error::ArchiveError;
 use crate::error::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -349,26 +348,13 @@ fn prompt_and_run_test(
     stdin().read_line(&mut line)?;
     let archive_path = PathBuf::from(line.trim().trim_matches('"'));
 
-    // Try testing without password first
-    match app.test_archive(&archive_path, None) {
-        Ok(res) => {
-            formatter.print_test_result(&res);
-            Ok(())
-        }
-        Err(e @ crate::error::UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
-            // Prompt for password interactively only if stdin is a real terminal
-            use std::io::IsTerminal;
-            if !std::io::stdin().is_terminal() {
-                return Err(e);
-            }
-            let password =
-                rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
-            let res = app.test_archive(&archive_path, Some(&password))?;
-            formatter.print_test_result(&res);
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
+    let res = crate::cli::run_test_with_prompt(
+        app,
+        &archive_path,
+        &crate::cli::TerminalPasswordPrompter,
+    )?;
+    formatter.print_test_result(&res);
+    Ok(())
 }
 
 /// Prompts for archive path, output directory, and executes extraction.
@@ -393,25 +379,14 @@ fn prompt_and_run_extract(
         Some(Path::new(dest_trimmed))
     };
 
-    // Try extracting without password first
-    match app.extract_archive(&archive_path, dest_opt, None) {
-        Ok(res) => {
-            formatter.print_extract_result(&res);
-            Ok(())
-        }
-        Err(e @ crate::error::UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
-            use std::io::IsTerminal;
-            if !std::io::stdin().is_terminal() {
-                return Err(e);
-            }
-            let password =
-                rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
-            let res = app.extract_archive(&archive_path, dest_opt, Some(&password))?;
-            formatter.print_extract_result(&res);
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
+    let res = crate::cli::run_extract_with_prompt(
+        app,
+        &archive_path,
+        dest_opt,
+        &crate::cli::TerminalPasswordPrompter,
+    )?;
+    formatter.print_extract_result(&res);
+    Ok(())
 }
 
 #[cfg(test)]

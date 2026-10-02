@@ -300,5 +300,5 @@ Every release manifest is cryptographically signed using Unarc's release key. Th
 Unarc is open-source software licensed under the **[MIT License](LICENSE)**.
 
 - **Unarc Codebase**: Licensed under the MIT License (see [LICENSE](LICENSE)). Copyright (c) 2026 Unarc Contributors.
-- **Bundled Engine (7-Zip / 7zz)**: Pinned 7-Zip (`7zz v26.03`) is developed by Igor Pavlov and is separately licensed under the **GNU LGPL v2.1+** (with the unRAR license restriction for RAR archive decompression and BSD/Public Domain portions for LZMA and 7z components). See [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) for details and full license terms.
-- **Third-Party Dependencies**: All third-party Rust libraries retain their original permissive licenses (MIT, Apache-2.0, BSD-3-Clause). Complete notices and dependency attributions are available in [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).
+- **Bundled Engine (7-Zip / 7zz)**: Pinned 7-Zip (`7zz v26.03`) is developed by Igor Pavlov and is separately licensed under the **GNU LGPL v2.1+** (with the unRAR license restriction for RAR archive decompression and BSD/Public Domain portions for LZMA and 7z components). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details and full license terms.
+- **Third-Party Dependencies**: All third-party Rust libraries retain their original permissive licenses (MIT, Apache-2.0, BSD-3-Clause). Complete notices and dependency attributions are available in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

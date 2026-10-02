@@ -19,10 +19,10 @@ This document tracks the final production release verification and readiness sta
 | **Updater Integrity** | **PASS** | Explicit cryptographic self-update (`unarc update`) verified via Ed25519 digital signature against embedded official trust anchor (`69ac4dbc...`); Mach-O / ELF binary header validation; same-filesystem staging; atomic POSIX `rename(2)` with RAII rollback guard; symlinked target paths rejected. |
 | **Docker Hardening** | **PASS** | Minimal distroless base (`gcr.io/distroless/cc-debian12:nonroot`); non-root user `65532:65532`; zero compilers, interpreters, dev tools, or shell binaries; verified under `--network none`, `--read-only`, `--cap-drop ALL`, `-v /input:ro`, `-v /output:rw` (8/8 checks passed in `scripts/verify-docker.sh`). |
 | **Release Signing** | **PASS** | Dedicated `unarc-sign` tool with `--strict` mode failing closed (exit code 1) when `RELEASE_SIGNING_KEY` is missing or empty; private key injected strictly via GitHub Actions secrets; zero private keys committed or logged. |
-| **Licensing** | **PASS** | Unarc project is licensed under MIT (`LICENSE`); third-party notices and 7-Zip LGPL / unRAR license distinctions preserved in `THIRD-PARTY-NOTICES`; both notice files included in distributed release archives. |
+| **Licensing** | **PASS** | Unarc project is licensed under MIT (`LICENSE`); third-party notices and 7-Zip LGPL / unRAR license distinctions preserved in `THIRD-PARTY-NOTICES.md`; canonical notice file included in distributed release archives. |
 | **Documentation** | **PASS** | Complete and accurate documentation across `README.md`, `ARCHITECTURE.md`, `SECURITY.md`, `CONTRIBUTING.md`, and `RELEASE_READINESS.md`. All CLI commands, options, and interactive slash commands verified against actual implementation. |
 | **Tests** | **PASS** | 110 automated tests passing (46 unit + 64 integration); `cargo fmt --check` clean; `cargo clippy -- -D warnings` passing with 0 warnings; Gitleaks secret scan passing with 0 leaks found. |
-| **Artifact Contents** | **PASS** | Release bundles contain only authentic binaries (`unarc`, `7zz`) and documentation (`LICENSE`, `THIRD-PARTY-NOTICES`, `README.md`). Zero source files, dev caches, build artifacts, or secret material present. |
+| **Artifact Contents** | **PASS** | Release bundles contain only authentic binaries (`unarc`, `7zz`) and documentation (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `README.md`). Zero source files, dev caches, build artifacts, or secret material present. |
 
 ---
 

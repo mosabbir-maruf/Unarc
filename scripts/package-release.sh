@@ -47,8 +47,8 @@ fi
 if [ -f "${DIR}/LICENSE" ]; then
     cp "${DIR}/LICENSE" "${STAGE_DIR}/${PACKAGE_NAME}/"
 fi
-if [ -f "${DIR}/THIRD-PARTY-NOTICES" ]; then
-    cp "${DIR}/THIRD-PARTY-NOTICES" "${STAGE_DIR}/${PACKAGE_NAME}/"
+if [ -f "${DIR}/THIRD-PARTY-NOTICES.md" ]; then
+    cp "${DIR}/THIRD-PARTY-NOTICES.md" "${STAGE_DIR}/${PACKAGE_NAME}/"
 fi
 
 # Create tar.gz bundle

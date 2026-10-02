@@ -16,7 +16,7 @@ pub enum UnarcError {
     #[error("Security violation: {0}")]
     Security(#[from] SecurityError),
 
-    /// Archive format or metadata error.
+    /// Archive format, engine, or password error.
     #[error("Archive error: {0}")]
     Archive(#[from] ArchiveError),
 
@@ -86,6 +86,14 @@ pub enum ArchiveError {
     #[error("Corrupt or invalid archive structure: {message}")]
     CorruptArchive { message: String },
 
+    /// Password is required to decrypt this archive.
+    #[error("Password required for encrypted archive: {path}")]
+    PasswordRequired { path: String },
+
+    /// Password provided failed decryption verification.
+    #[error("Invalid password provided for archive: {path}")]
+    InvalidPassword { path: String },
+
     /// Archive backend operation is not yet available or failed.
     #[error("Backend error ({backend}): {message}")]
     BackendFailure { backend: String, message: String },
@@ -125,6 +133,20 @@ mod tests {
             3
         );
         assert_eq!(
+            UnarcError::Archive(ArchiveError::PasswordRequired {
+                path: "secret.7z".into()
+            })
+            .exit_code(),
+            3
+        );
+        assert_eq!(
+            UnarcError::Archive(ArchiveError::InvalidPassword {
+                path: "secret.7z".into()
+            })
+            .exit_code(),
+            3
+        );
+        assert_eq!(
             UnarcError::Platform(PlatformError::Unsupported {
                 details: "test".into()
             })
@@ -152,6 +174,14 @@ mod tests {
         assert_eq!(
             top_err.to_string(),
             "Security violation: Path traversal detected: ../secret"
+        );
+
+        let pass_err = ArchiveError::PasswordRequired {
+            path: "data.zip".into(),
+        };
+        assert_eq!(
+            pass_err.to_string(),
+            "Password required for encrypted archive: data.zip"
         );
     }
 }

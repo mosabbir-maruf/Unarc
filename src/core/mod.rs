@@ -2,4 +2,4 @@
 
 pub mod app;
 
-pub use app::{AppInfo, Application};
+pub use app::{AppInfo, Application, DoctorReport, EngineInfo};

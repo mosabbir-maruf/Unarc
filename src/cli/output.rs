@@ -1,64 +1,97 @@
 //! Presentation and output rendering.
 
-use crate::archive::metadata::ArchiveMetadata;
-use crate::core::app::AppInfo;
+use crate::archive::backend::{ArchiveExtractResult, ArchiveTestResult};
+use crate::core::app::{AppInfo, DoctorReport, EngineInfo};
 use crate::error::UnarcError;
+use crate::security::SecurityPolicy;
 use serde_json::json;
-use std::path::Path;
 
 /// Renders formatted output to stdout.
 pub struct OutputFormatter {
     json_mode: bool,
     quiet: bool,
+    verbose: bool,
+    color_enabled: bool,
 }
 
 impl OutputFormatter {
     /// Creates a new output formatter.
     #[must_use]
-    pub fn new(json_mode: bool, quiet: bool) -> Self {
-        Self { json_mode, quiet }
+    pub fn new(json_mode: bool, quiet: bool, verbose: bool) -> Self {
+        let no_color = std::env::var_os("NO_COLOR").is_some();
+        Self {
+            json_mode,
+            quiet,
+            verbose,
+            color_enabled: !no_color,
+        }
     }
 
-    /// Formats and displays archive inspection result.
-    pub fn print_inspection(&self, path: &Path, metadata: &ArchiveMetadata) {
+    /// Helper for conditional ANSI color styling.
+    fn style<'a>(&self, text: &'a str, ansi_code: &'a str) -> std::borrow::Cow<'a, str> {
+        if self.color_enabled {
+            std::borrow::Cow::Owned(format!("{ansi_code}{text}\x1b[0m"))
+        } else {
+            std::borrow::Cow::Borrowed(text)
+        }
+    }
+
+    /// Formats and displays version info.
+    pub fn print_version(&self) {
         if self.json_mode {
             let val = json!({
-                "status": "success",
-                "path": path.to_string_lossy(),
-                "metadata": metadata,
+                "name": "unarc",
+                "version": env!("CARGO_PKG_VERSION")
             });
             println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+        } else {
+            println!("unarc {}", env!("CARGO_PKG_VERSION"));
+        }
+    }
+
+    /// Formats and displays archive test result.
+    pub fn print_test_result(&self, result: &ArchiveTestResult) {
+        if self.json_mode {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(result).unwrap_or_default()
+            );
         } else if !self.quiet {
-            println!("Archive Inspection: {}", path.display());
-            println!("  Format:           {}", metadata.format);
-            println!("  File Size:        {} bytes", metadata.file_size_bytes);
-            println!("  Encrypted:        {}", metadata.is_encrypted);
-            println!("  Solid:            {}", metadata.is_solid);
-            if let Some(count) = metadata.entries_count {
-                println!("  Entries Count:    {count}");
-            }
-            if let Some(uncomp) = metadata.total_uncompressed_bytes {
-                println!("  Uncompressed:     {uncomp} bytes");
+            let status_badge = if result.passed {
+                self.style("PASS", "\x1b[1;32m")
+            } else {
+                self.style("FAIL", "\x1b[1;31m")
+            };
+            println!("Archive Test: {} [{}]", result.path.display(), status_badge);
+            println!("  Format:   {}", result.format);
+            println!("  Status:   {}", result.message);
+            if let Some(count) = result.entries_checked {
+                println!("  Entries:  {count}");
             }
         }
     }
 
-    /// Formats and displays path validation result.
-    pub fn print_validation(&self, original: &Path, sanitized: &Path, destination: Option<&Path>) {
+    /// Formats and displays archive extraction result.
+    pub fn print_extract_result(&self, result: &ArchiveExtractResult) {
         if self.json_mode {
-            let val = json!({
-                "status": "valid",
-                "input": original.to_string_lossy(),
-                "sanitized": sanitized.to_string_lossy(),
-                "destination": destination.map(|d| d.to_string_lossy()),
-            });
-            println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(result).unwrap_or_default()
+            );
         } else if !self.quiet {
-            println!("Path Security Validation: PASS");
-            println!("  Input:     {}", original.display());
-            println!("  Sanitized: {}", sanitized.display());
-            if let Some(dest) = destination {
-                println!("  Resolved:  {}", dest.display());
+            let status_badge = self.style("SUCCESS", "\x1b[1;32m");
+            println!(
+                "Archive Extract: {} [{}]",
+                result.archive_path.display(),
+                status_badge
+            );
+            println!("  Destination: {}", result.destination.display());
+            println!("  Format:      {}", result.format);
+            if let Some(entries) = result.entries_extracted {
+                println!("  Entries:     {entries}");
+            }
+            if let Some(bytes) = result.total_bytes_extracted {
+                println!("  Extracted:   {bytes} bytes");
             }
         }
     }
@@ -68,38 +101,106 @@ impl OutputFormatter {
         if self.json_mode {
             println!("{}", serde_json::to_string_pretty(info).unwrap_or_default());
         } else if !self.quiet {
-            println!("Unarc - Production-grade Security Archive Engine");
+            println!("Unarc - Secure Archive Utility");
             println!("  Version:       {}", info.version);
             println!("  OS:            {}", info.platform.os);
             println!("  Architecture:  {}", info.platform.arch);
             println!("  Apple Silicon: {}", info.platform.is_apple_silicon);
             println!("  Linux:         {}", info.platform.is_linux);
-            println!("  Security Capabilities:");
+            println!("  Engine Status:");
+            println!("    Pinned 7-Zip:    v{}", info.engine.pinned_version);
+            println!("    Available:       {}", info.engine.is_available);
+            println!("    Expected SHA256: {}", info.engine.expected_sha256);
+            if let Some(ref path) = info.engine.resolved_path {
+                println!("    Binary Path:     {}", path.display());
+            }
+            if self.verbose {
+                println!("  Platform Capabilities:");
+                println!(
+                    "    Quarantine XAttr Support:   {}",
+                    info.platform.capabilities.supports_quarantine_xattr
+                );
+                println!(
+                    "    POSIX Permission Support:   {}",
+                    info.platform.capabilities.supports_posix_permissions
+                );
+                println!(
+                    "    Sandbox Confinement:        {}",
+                    info.platform.capabilities.supports_sandbox_confinement
+                );
+                println!("  Security Policy Defaults:");
+                println!(
+                    "    Allow Absolute Paths:       {}",
+                    info.policy.allow_absolute_paths
+                );
+                println!(
+                    "    Allow Symlinks:             {}",
+                    info.policy.allow_symlinks
+                );
+                println!(
+                    "    Max Path Depth:             {}",
+                    info.policy.max_path_depth
+                );
+            }
+        }
+    }
+
+    /// Formats and displays doctor health check.
+    pub fn print_doctor(&self, report: &DoctorReport) {
+        if self.json_mode {
             println!(
-                "    Quarantine XAttr Support:   {}",
-                info.platform.capabilities.supports_quarantine_xattr
+                "{}",
+                serde_json::to_string_pretty(report).unwrap_or_default()
             );
+        } else if !self.quiet {
+            let status = if report.healthy {
+                self.style("HEALTHY", "\x1b[1;32m")
+            } else {
+                self.style("ATTENTION NEEDED", "\x1b[1;31m")
+            };
+            println!("System Diagnostics Doctor: [{}]", status);
+            println!("  OS:             {}", report.platform.os);
+            println!("  Arch:           {}", report.platform.arch);
+            println!("  Pinned Engine:  v{}", report.engine.pinned_version);
+            println!("  Engine Ready:   {}", report.engine.is_available);
+            if let Some(ref p) = report.engine.resolved_path {
+                println!("  Engine Path:    {}", p.display());
+            }
+            println!("  Zero-Trust:     Enforced");
+        }
+    }
+
+    /// Formats and displays security configuration.
+    pub fn print_config(&self, policy: &SecurityPolicy) {
+        if self.json_mode {
             println!(
-                "    POSIX Permission Support:   {}",
-                info.platform.capabilities.supports_posix_permissions
+                "{}",
+                serde_json::to_string_pretty(policy).unwrap_or_default()
             );
-            println!(
-                "    Sandbox Confinement:        {}",
-                info.platform.capabilities.supports_sandbox_confinement
-            );
-            println!("  Security Policy Default:");
-            println!(
-                "    Allow Absolute Paths:       {}",
-                info.policy.allow_absolute_paths
-            );
-            println!(
-                "    Allow Symlinks:             {}",
-                info.policy.allow_symlinks
-            );
-            println!(
-                "    Max Path Depth:             {}",
-                info.policy.max_path_depth
-            );
+        } else if !self.quiet {
+            println!("Security Configuration (Zero-Trust Enforcement):");
+            println!("  Allow Absolute Paths:  {}", policy.allow_absolute_paths);
+            println!("  Allow Symlinks:        {}", policy.allow_symlinks);
+            println!("  Max Path Depth:        {}", policy.max_path_depth);
+            println!("  Max Path Length:       {} bytes", policy.max_path_length);
+        }
+    }
+
+    /// Formats and displays engine update status.
+    pub fn print_engine_update(&self, engine: &EngineInfo) {
+        if self.json_mode {
+            let val = json!({
+                "status": "hermetic",
+                "pinned_version": engine.pinned_version,
+                "release_url": engine.release_url,
+                "note": "Unarc uses pinned, verified engines. Dynamic runtime updates are disabled for security."
+            });
+            println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+        } else if !self.quiet {
+            println!("Engine Update Status:");
+            println!("  Pinned Version:   v{}", engine.pinned_version);
+            println!("  Source Release:   {}", engine.release_url);
+            println!("  Policy:           Hermetic & pinned at build-time. Dynamic runtime updates are disabled.");
         }
     }
 
@@ -124,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_output_formatter_initialization() {
-        let fmt = OutputFormatter::new(true, false);
+        let fmt = OutputFormatter::new(true, false, false);
         assert!(fmt.json_mode);
         assert!(!fmt.quiet);
     }

@@ -4,15 +4,15 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 /// Production-grade, security-focused archive utility.
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Clone, PartialEq, Eq)]
 #[command(
     name = "unarc",
     version,
     about = "Production-grade, security-focused archive utility",
-    long_about = "Unarc is a security-focused CLI foundation designed for macOS Apple Silicon and Linux, enforcing zero-trust extraction policies."
+    long_about = "Unarc is a security-focused CLI utility with zero-trust extraction defaults."
 )]
 pub struct Cli {
-    /// Global output in structured JSON format.
+    /// Output in structured JSON format.
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -25,38 +25,41 @@ pub struct Cli {
     pub quiet: bool,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 /// Available Unarc subcommands.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Subcommand, Clone, PartialEq, Eq)]
 pub enum Commands {
-    /// Inspect archive format and metadata.
-    Inspect(InspectArgs),
+    /// Extract an archive securely with boundary enforcement.
+    Extract(ExtractArgs),
 
-    /// Validate a path or candidate entry against strict security policies.
-    Validate(ValidateArgs),
+    /// Test the integrity of an archive without writing to disk.
+    Test(TestArgs),
 
-    /// Display platform information, security policy status, and engine capabilities.
+    /// Display platform information, security policy status, and engine details.
     Info,
+
+    /// Display version information.
+    Version,
 }
 
-/// Arguments for the `inspect` subcommand.
-#[derive(Debug, Args)]
-pub struct InspectArgs {
-    /// Path to the archive file to inspect.
+/// Arguments for the `extract` subcommand.
+#[derive(Debug, Args, Clone, PartialEq, Eq)]
+pub struct ExtractArgs {
+    /// Path to the archive file to extract.
     #[arg(value_name = "ARCHIVE")]
     pub archive: PathBuf,
+
+    /// Optional destination directory for extracted contents.
+    #[arg(short, long, value_name = "OUTPUT")]
+    pub output: Option<PathBuf>,
 }
 
-/// Arguments for the `validate` subcommand.
-#[derive(Debug, Args)]
-pub struct ValidateArgs {
-    /// Candidate path to validate for traversal or security risks.
-    #[arg(value_name = "PATH")]
-    pub path: PathBuf,
-
-    /// Optional destination boundary directory to test containment against.
-    #[arg(long, value_name = "BASE_DIR")]
-    pub base_dir: Option<PathBuf>,
+/// Arguments for the `test` subcommand.
+#[derive(Debug, Args, Clone, PartialEq, Eq)]
+pub struct TestArgs {
+    /// Path to the archive file to test.
+    #[arg(value_name = "ARCHIVE")]
+    pub archive: PathBuf,
 }

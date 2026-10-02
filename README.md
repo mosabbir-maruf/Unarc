@@ -2,29 +2,89 @@
 
 A production-grade, security-focused archive utility CLI in Rust.
 
-Designed targeting **macOS Apple Silicon** first, with full **Docker/Linux** development and CI support. Unarc enforces zero-trust path validation and safe extraction defaults.
+Designed targeting **macOS Apple Silicon** first, with full **Docker/Linux** development and CI support. Unarc enforces zero-trust path validation, interactive terminal UX, and a hermetically bundled archive engine.
 
 ---
 
-## Key Principles & Phase 1 Scope
+## Key Principles & Scope
 
-- **Zero Host Pollution**: All Rust compilation, formatting, linting, and testing run strictly inside pinned Docker containers. No host toolchain installations required.
-- **Security-First Architecture**: Path traversal prevention (`Zip Slip`), absolute path rejection, null-byte checks, and boundary containment enforcement.
-- **Zero Extraneous State**: No telemetry, analytics, updater, network services, background daemons, persistent state, or uncoordinated file logging.
-- **Clean Subsystem Boundaries**: Modularity separating presentation, core orchestration, format abstractions, security policy, platform detection, and structured errors.
-
----
-
-## Prerequisites
-
-- **Docker** (Docker Desktop on macOS, or Docker Engine on Linux)
-- `make` (optional, for convenience wrappers)
-
-No local Rust or Cargo installation is needed on your machine.
+- **Zero Host Pollution**: All Rust compilation, formatting, linting, and testing run strictly inside pinned Docker containers (`rust:1.85.0-slim`).
+- **Hermetic Pinned Archive Engine**: Bundles an exact official release of 7-Zip (`7zz v24.09`). The engine is verified by SHA-256 and never downloaded at runtime or invoked from host package managers (like Homebrew).
+- **Interactive & Scriptable UX**: Supports both direct script commands and an interactive terminal shell with an ASCII wordmark, `/` command suggestions, arrow-key navigation, and Tab completion.
+- **Zero-Trust Extraction**: Comprehensive path traversal protection (`Zip Slip`), absolute path rejection, null-byte checks, and boundary containment enforcement.
+- **Privacy & Safety**: No telemetry, analytics, updater, network services, background daemons, persistent state, or uncoordinated file logging.
 
 ---
 
-## Development & Validation Commands
+## Pinned 7-Zip (7zz) Engine
+
+| Attribute | Value |
+|---|---|
+| **Version** | `24.09` |
+| **Release Location** | `https://github.com/ip7z/7zip/releases/tag/24.09` |
+| **macOS (Universal arm64/x86_64)** | `bd5765978a541323758d82ad1d30df76a2e3c86341f12d6b0524d837411e9b4a` |
+| **Linux ARM64 (aarch64)** | `ea6a2595eba6441e1e60ddaa47d73d849e99ef2ba18d3f386557cdcb9dc9cebd` |
+| **Linux x86_64** | `9a556170350dafb60a97348b86a94b087d97fd36007760691576cac0d88b132b` |
+
+---
+
+## CLI Usage
+
+### Direct / Script Mode
+
+```bash
+# Securely extract an archive to a destination
+unarc extract path/to/archive.rar --output /path/to/output
+
+# Test integrity of an archive without writing to disk
+unarc test path/to/archive.7z
+
+# Display platform, engine status, and capabilities
+unarc info
+unarc --json info
+
+# Display binary version
+unarc version
+```
+
+> **Note on Password-Protected Archives**: If an archive is encrypted, Unarc prompts for the password interactively via the terminal. No plaintext `--password` CLI argument is exposed.
+
+### Interactive Mode
+
+Launch `unarc` without subcommands to enter the interactive shell:
+```bash
+unarc
+```
+
+```
+ _   _ _   _   _    ____   ____ 
+| | | | \ | | / \  |  _ \ / ___|
+| | | |  \| |/ _ \ | |_) | |    
+| |_| | |\  / ___ \|  _ <| |___ 
+ \___/|_| \_/_/   \_\_| \_\\____|
+          Secure Archive Utility
+```
+
+Interactive Features:
+- Type `/` to display slash command suggestions.
+- Prefix filtering: e.g. `/ex` filters to `/extract` and `/exit`.
+- Use **Up/Down Arrow keys** to navigate suggestions.
+- Press **Tab** to autocomplete.
+- Press **Enter** to execute.
+
+Available Interactive Commands:
+- `/extract`: Prompts for archive path and destination, then extracts securely.
+- `/test`: Tests archive integrity.
+- `/info`: Displays platform, engine, and security details.
+- `/doctor`: Runs diagnostic health checks.
+- `/update`: Inspects engine pinning and hermetic policy.
+- `/config`: Displays active security policy.
+- `/help`: Displays command reference.
+- `/exit`: Exits the interactive shell.
+
+---
+
+## Development & Automation Commands
 
 All commands run through the pinned toolchain container (`rust:1.85.0-slim`):
 
@@ -50,50 +110,3 @@ make build
 # Build optimized release binary
 make release
 ```
-
-Alternatively, invoke `./scripts/dev.sh <command>` directly (e.g. `./scripts/dev.sh test`).
-
----
-
-## CLI Usage
-
-The binary name is `unarc`.
-
-### 1. Platform & Engine Info
-```bash
-unarc info
-# Or JSON output:
-unarc --json info
-```
-
-### 2. Archive Inspection
-Inspect archive format, disk size, and encryption indicators:
-```bash
-unarc inspect path/to/archive.zip
-unarc --json inspect path/to/archive.tar.gz
-```
-
-### 3. Path Security Validation
-Validate candidate relative paths and destination containment against zero-trust policy:
-```bash
-# Verify relative path safety
-unarc validate documents/report.pdf
-
-# Verify boundary containment against destination folder
-unarc validate data/extracted.json --base-dir /destination
-```
-
----
-
-## Module Layout
-
-| Subsystem | Path | Description |
-|---|---|---|
-| **CLI / Presentation** | `src/cli/` | Argument parsing (`clap`), user messaging, JSON serialization |
-| **Core Application** | `src/core/` | Domain coordinator and operational workflow |
-| **Archive Layer** | `src/archive/` | Format detection (magic bytes/extensions) and `ArchiveBackend` trait |
-| **Security Layer** | `src/security/` | Path sanitization, traversal defense, boundary verification |
-| **Errors** | `src/error.rs` | Strongly typed domain errors and UNIX process exit codes |
-| **Platform** | `src/platform/` | macOS Apple Silicon and Linux runtime/capability interrogation |
-
-For detailed architectural rationale, refer to [ARCHITECTURE.md](ARCHITECTURE.md).

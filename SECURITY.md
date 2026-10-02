@@ -17,17 +17,20 @@ Only the latest release version receives active security patches.
 
 ## Reporting a Security Vulnerability
 
-If you believe you have discovered a security vulnerability in Unarc—including path traversal escapes, sandbox circumvention, process isolation failures, cryptographic update bypasses, or secret leakage—please report it responsibly through private channels.
+If you believe you have discovered a security vulnerability in Unarc—including path traversal escapes, sandbox circumvention, process isolation failures, cryptographic update bypasses, or secret leakage—please report it responsibly through the repository's private security reporting channel.
 
-**Do NOT report security vulnerabilities via public GitHub issues, discussions, or pull requests.**
+**Do NOT disclose or report sensitive vulnerabilities through public issues, discussions, or pull requests.** Public disclosure puts users and systems at immediate risk before a fix can be prepared and released.
 
 ### How to Report
 
-Please report sensitive security issues via email to:
+All vulnerability reports must be submitted exclusively through GitHub's Private Vulnerability Reporting mechanism:
 
-`SECURITY_CONTACT_EMAIL: <SECURITY_EMAIL_PLACEHOLDER>`
+1. Navigate to the repository page on GitHub.
+2. Click on the **Security** tab.
+3. Under the **Reporting** section in the left sidebar, click **Report a vulnerability** (or **Advisories** -> **New draft security advisory**).
+4. Fill out the advisory form with the details outlined below and submit.
 
-*(Repository owners: replace `<SECURITY_EMAIL_PLACEHOLDER>` with your configured security contact address or GitHub Private Vulnerability Reporting link).*
+This opens a private advisory draft visible only to repository maintainers, where we can collaborate directly with you on verifying the issue and preparing a fix.
 
 ### What to Include in Your Report
 

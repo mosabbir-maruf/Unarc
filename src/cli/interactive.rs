@@ -14,7 +14,7 @@ pub const ASCII_BANNER: &str = r#"
 | | | |  \| |/ _ \ | |_) | |    
 | |_| | |\  / ___ \|  _ <| |___ 
  \___/|_| \_/_/   \_\_| \_\\____|
-          Secure Archive Utility
+     Secure Archive Utility
 "#;
 
 /// Available slash commands and descriptions.

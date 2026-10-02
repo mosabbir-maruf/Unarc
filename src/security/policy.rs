@@ -22,6 +22,10 @@ pub struct SecurityPolicy {
 
     /// Maximum permissible path length in bytes.
     pub max_path_length: usize,
+
+    /// Whether OS kernel sandbox confinement (e.g. macOS Seatbelt) is mandatory.
+    /// If true and the kernel sandbox is not enforced, extraction fails closed.
+    pub require_kernel_sandbox: bool,
 }
 
 impl Default for SecurityPolicy {
@@ -39,7 +43,15 @@ impl SecurityPolicy {
             allow_symlinks: false,
             max_path_depth: DEFAULT_MAX_PATH_DEPTH,
             max_path_length: DEFAULT_MAX_PATH_LENGTH,
+            require_kernel_sandbox: false,
         }
+    }
+
+    /// Sets whether kernel-level sandbox confinement is mandatory.
+    #[must_use]
+    pub fn with_require_kernel_sandbox(mut self, require: bool) -> Self {
+        self.require_kernel_sandbox = require;
+        self
     }
 
     /// Validates an entry path extracted from or contained within an archive.

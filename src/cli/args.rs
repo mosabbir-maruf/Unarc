@@ -42,6 +42,9 @@ pub enum Commands {
 
     /// Display version information.
     Version,
+
+    /// Run system diagnostics and security boundary verification.
+    Doctor,
 }
 
 /// Arguments for the `extract` subcommand.

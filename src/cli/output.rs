@@ -166,10 +166,12 @@ impl OutputFormatter {
             println!("  Pinned Engine:  v{}", report.engine.pinned_version);
             println!("  Diagnostic Probes:");
             for check in &report.checks {
-                let badge = if check.passed {
-                    self.style("PASS", "\x1b[1;32m")
-                } else {
+                let badge = if !check.passed {
                     self.style("FAIL", "\x1b[1;31m")
+                } else if check.message.starts_with("DEGRADED:") {
+                    self.style("WARN", "\x1b[1;33m")
+                } else {
+                    self.style("PASS", "\x1b[1;32m")
                 };
                 println!("    [{badge}] {:<30} {}", check.name, check.message);
             }

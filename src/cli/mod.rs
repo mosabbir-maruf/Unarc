@@ -37,6 +37,11 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
             formatter.print_info(&info);
             Ok(())
         }
+        Some(Commands::Doctor) => {
+            let report = app.doctor_check();
+            formatter.print_doctor(&report);
+            Ok(())
+        }
         Some(Commands::Test(args)) => {
             let res = match app.test_archive(&args.archive, None) {
                 Ok(r) => r,

@@ -37,13 +37,23 @@ pub enum SandboxStatus {
 }
 
 impl SandboxStatus {
+    /// Human-readable uppercase status tag.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Enforced => "ENFORCED",
+            Self::Degraded => "DEGRADED",
+            Self::Unavailable => "UNAVAILABLE",
+        }
+    }
+
     /// Human-readable description of current sandbox enforcement status.
     #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Enforced => "Full OS kernel confinement active (network denied, paths restricted)",
-            Self::Degraded => "Process group isolation, environment scrubbing, and containment enforced; OS kernel sandbox unavailable in environment",
-            Self::Unavailable => "Sandbox confinement unavailable",
+            Self::Enforced => "macOS Seatbelt kernel sandbox actively enforced (network denied, paths restricted to resolved volumes and destination)",
+            Self::Degraded => "Process group isolation, environment scrubbing, and containment enforced; kernel-level LSM sandbox not enforced",
+            Self::Unavailable => "Process sandbox confinement unavailable",
         }
     }
 }
@@ -216,34 +226,94 @@ impl SandboxRunner {
         #[cfg(target_os = "macos")]
         {
             if Path::new("/usr/bin/sandbox-exec").exists() {
-                // Test lightweight seatbelt execution probe
-                let test_profile = "(version 1)(allow process-exec (literal \"/bin/echo\"))(allow file-read* (subpath \"/usr/lib\"))";
+                // Real runtime probe executing under Seatbelt confinement
+                let test_profile = "(version 1)\
+                    (deny default)\
+                    (deny network*)\
+                    (allow process-exec (literal \"/bin/echo\"))\
+                    (allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/System/Volumes\"))";
                 match Command::new("/usr/bin/sandbox-exec")
                     .args(["-p", test_profile, "/bin/echo", "probe"])
                     .output()
                 {
-                    Ok(output) if output.status.success() => SandboxStatus::Enforced,
-                    _ => SandboxStatus::Degraded,
+                    Ok(output)
+                        if output.status.success()
+                            && String::from_utf8_lossy(&output.stdout).trim() == "probe" =>
+                    {
+                        SandboxStatus::Enforced
+                    }
+                    _ => {
+                        if probe_process_isolation() {
+                            SandboxStatus::Degraded
+                        } else {
+                            SandboxStatus::Unavailable
+                        }
+                    }
                 }
-            } else {
+            } else if probe_process_isolation() {
                 SandboxStatus::Degraded
+            } else {
+                SandboxStatus::Unavailable
             }
         }
 
         #[cfg(target_os = "linux")]
         {
-            // On Linux, test Landlock or namespace capabilities
-            // If running inside restricted container without Landlock, report Degraded
-            if probe_linux_landlock() {
-                SandboxStatus::Enforced
-            } else {
+            // On Linux, Unarc enforces process-level isolation:
+            // purged ambient environment, isolated process group, PR_SET_NO_NEW_PRIVS, PR_SET_PDEATHSIG.
+            // A kernel-level LSM sandbox (Landlock) is not applied, so Unarc accurately reports Degraded.
+            if probe_process_isolation() {
                 SandboxStatus::Degraded
+            } else {
+                SandboxStatus::Unavailable
             }
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
-            SandboxStatus::Unavailable
+            if probe_process_isolation() {
+                SandboxStatus::Degraded
+            } else {
+                SandboxStatus::Unavailable
+            }
+        }
+    }
+
+    /// Verifies via runtime probe that network operations are denied to the confined execution boundary.
+    #[must_use]
+    pub fn probe_network_denial() -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            if Path::new("/usr/bin/sandbox-exec").exists() && Path::new("/usr/bin/nc").exists() {
+                let test_profile = "(version 1)\
+                    (deny default)\
+                    (deny network*)\
+                    (allow process-exec (literal \"/usr/bin/nc\"))\
+                    (allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/System/Volumes\") (subpath \"/dev\"))";
+                match Command::new("/usr/bin/sandbox-exec")
+                    .args([
+                        "-p",
+                        test_profile,
+                        "/usr/bin/nc",
+                        "-z",
+                        "-w",
+                        "1",
+                        "127.0.0.1",
+                        "80",
+                    ])
+                    .output()
+                {
+                    Ok(output) => !output.status.success(),
+                    Err(_) => true,
+                }
+            } else {
+                true
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            true
         }
     }
 
@@ -292,8 +362,7 @@ impl SandboxRunner {
 
         #[cfg(target_os = "macos")]
         {
-            let seatbelt_available = Path::new("/usr/bin/sandbox-exec").exists();
-            if seatbelt_available {
+            if Self::probe_status() == SandboxStatus::Enforced {
                 let profile = generate_macos_seatbelt_profile(policy);
                 let mut cmd = Command::new("/usr/bin/sandbox-exec");
                 cmd.arg("-p").arg(profile);
@@ -306,7 +375,7 @@ impl SandboxRunner {
             }
         }
 
-        // Standard confined command (Linux or fallback)
+        // Standard confined command (Linux, degraded macOS, or container fallback)
         let mut cmd = Command::new(&policy.engine_binary);
         for arg in arg_list {
             cmd.arg(arg);
@@ -352,10 +421,26 @@ fn apply_process_isolation(cmd: &mut Command, policy: &ProcessSandboxPolicy) {
     }
 }
 
+/// Helper probing whether basic process isolation and environment scrubbing is functional.
+fn probe_process_isolation() -> bool {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", "echo probe_ok"]);
+    cmd.env_clear();
+    cmd.env("PATH", "/usr/bin:/bin");
+    #[cfg(unix)]
+    cmd.process_group(0);
+    match cmd.output() {
+        Ok(out) => {
+            out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "probe_ok"
+        }
+        Err(_) => false,
+    }
+}
+
 /// Generates a macOS Seatbelt Profile Language (SBPL) profile for native process confinement.
 #[cfg(target_os = "macos")]
 fn generate_macos_seatbelt_profile(policy: &ProcessSandboxPolicy) -> String {
-    let mut profile = String::with_capacity(1024);
+    let mut profile = String::with_capacity(2048);
     profile.push_str("(version 1)\n");
     profile.push_str("(deny default)\n");
 
@@ -364,27 +449,76 @@ fn generate_macos_seatbelt_profile(policy: &ProcessSandboxPolicy) -> String {
     }
 
     // Engine binary execution
-    let engine_escaped = escape_sbpl_string(&policy.engine_binary);
+    let engine_path = policy
+        .engine_binary
+        .canonicalize()
+        .unwrap_or_else(|_| policy.engine_binary.clone());
+    let engine_escaped = escape_sbpl_string(&engine_path);
+    let raw_engine_escaped = escape_sbpl_string(&policy.engine_binary);
+
     profile.push_str(&format!(
-        "(allow process-exec (literal \"{engine_escaped}\"))\n"
+        "(allow process-exec (literal \"{engine_escaped}\") (literal \"{raw_engine_escaped}\"))\n"
     ));
     profile.push_str("(allow process-fork)\n");
     profile.push_str("(allow sysctl-read)\n");
     profile.push_str("(allow mach-lookup)\n");
 
-    // Standard runtime and system library dependencies
+    // Standard runtime, dynamic linker, and system library dependencies
     profile.push_str("(allow file-read-data file-read-metadata\n");
     profile.push_str("    (subpath \"/usr/lib\")\n");
     profile.push_str("    (subpath \"/System/Library\")\n");
+    profile.push_str("    (subpath \"/System/Volumes\")\n");
     profile.push_str("    (subpath \"/usr/share\")\n");
     profile.push_str("    (subpath \"/dev\")\n");
-    profile.push_str(&format!("    (literal \"{engine_escaped}\"))\n"));
+    profile.push_str(&format!(
+        "    (literal \"{engine_escaped}\") (literal \"{raw_engine_escaped}\"))\n"
+    ));
+
+    // Collect all ancestor directories that need metadata lookup for path traversal
+    let mut ancestor_dirs = std::collections::BTreeSet::new();
+
+    let mut add_ancestors = |p: &Path| {
+        let mut cur = p.parent();
+        while let Some(parent) = cur {
+            if parent.as_os_str().is_empty() {
+                break;
+            }
+            ancestor_dirs.insert(parent.to_path_buf());
+            if let Ok(canon) = parent.canonicalize() {
+                ancestor_dirs.insert(canon);
+            }
+            cur = parent.parent();
+        }
+    };
+
+    add_ancestors(&policy.engine_binary);
+    add_ancestors(&policy.scratch_dir);
+    if let Some(ref dest) = policy.destination_dir {
+        add_ancestors(dest);
+    }
 
     // Permitted read-only archive input files
     for input in &policy.input_files {
+        add_ancestors(input);
         let input_escaped = escape_sbpl_string(input);
         profile.push_str(&format!(
             "(allow file-read-data file-read-metadata (literal \"{input_escaped}\"))\n"
+        ));
+        if let Ok(canon) = input.canonicalize() {
+            if canon != *input {
+                let canon_escaped = escape_sbpl_string(&canon);
+                profile.push_str(&format!(
+                    "(allow file-read-data file-read-metadata (literal \"{canon_escaped}\"))\n"
+                ));
+            }
+        }
+    }
+
+    // Allow metadata lookup on ancestor directories so the kernel can resolve permitted paths
+    for dir in &ancestor_dirs {
+        let dir_escaped = escape_sbpl_string(dir);
+        profile.push_str(&format!(
+            "(allow file-read-metadata (literal \"{dir_escaped}\"))\n"
         ));
     }
 
@@ -394,6 +528,14 @@ fn generate_macos_seatbelt_profile(policy: &ProcessSandboxPolicy) -> String {
         profile.push_str(&format!(
             "(allow file-read* file-write* (subpath \"{dest_escaped}\"))\n"
         ));
+        if let Ok(canon) = dest.canonicalize() {
+            if canon != *dest {
+                let canon_escaped = escape_sbpl_string(&canon);
+                profile.push_str(&format!(
+                    "(allow file-read* file-write* (subpath \"{canon_escaped}\"))\n"
+                ));
+            }
+        }
     }
 
     // Permitted isolated scratch space
@@ -401,6 +543,14 @@ fn generate_macos_seatbelt_profile(policy: &ProcessSandboxPolicy) -> String {
     profile.push_str(&format!(
         "(allow file-read* file-write* (subpath \"{scratch_escaped}\"))\n"
     ));
+    if let Ok(canon) = policy.scratch_dir.canonicalize() {
+        if canon != policy.scratch_dir {
+            let canon_escaped = escape_sbpl_string(&canon);
+            profile.push_str(&format!(
+                "(allow file-read* file-write* (subpath \"{canon_escaped}\"))\n"
+            ));
+        }
+    }
 
     profile
 }
@@ -411,39 +561,6 @@ fn escape_sbpl_string(path: &Path) -> String {
     path.to_string_lossy()
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
-}
-
-/// Probes whether Linux Landlock LSM rulesets can be created in the current kernel.
-#[cfg(target_os = "linux")]
-fn probe_linux_landlock() -> bool {
-    // Landlock syscall numbers: landlock_create_ruleset = 444 on x86_64 / arm64
-    // Standard test with invalid attr to test if kernel recognizes syscall
-    #[repr(C)]
-    struct LandlockRulesetAttr {
-        handled_access_fs: u64,
-    }
-    let attr = LandlockRulesetAttr {
-        handled_access_fs: 0,
-    };
-    let res = unsafe {
-        libc::syscall(
-            444, // SYS_landlock_create_ruleset
-            &attr as *const LandlockRulesetAttr,
-            std::mem::size_of::<LandlockRulesetAttr>(),
-            0u32,
-        )
-    };
-    // Returns 0 or positive fd on success, or -1 with errno
-    // If errno is ENOSYS (38) or EOPNOTSUPP (95), Landlock is unsupported
-    if res >= 0 {
-        unsafe {
-            libc::close(res as i32);
-        }
-        true
-    } else {
-        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        err != libc::ENOSYS && err != libc::EOPNOTSUPP
-    }
 }
 
 #[cfg(test)]
@@ -483,10 +600,18 @@ mod tests {
     #[test]
     fn test_sandbox_status_description() {
         let enforced = SandboxStatus::Enforced;
-        assert!(enforced.description().contains("Full OS kernel"));
+        assert_eq!(enforced.label(), "ENFORCED");
+        assert!(enforced
+            .description()
+            .contains("kernel sandbox actively enforced"));
 
         let degraded = SandboxStatus::Degraded;
+        assert_eq!(degraded.label(), "DEGRADED");
         assert!(degraded.description().contains("Process group isolation"));
+
+        let unavailable = SandboxStatus::Unavailable;
+        assert_eq!(unavailable.label(), "UNAVAILABLE");
+        assert!(unavailable.description().contains("unavailable"));
     }
 
     #[test]

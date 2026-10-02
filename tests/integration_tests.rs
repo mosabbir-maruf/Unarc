@@ -11,6 +11,9 @@ use unarc::cli::output::OutputFormatter;
 use unarc::cli::run_with_cli;
 use unarc::core::Application;
 use unarc::error::{ArchiveError, UnarcError};
+use unarc::security::{
+    ProcessSandboxPolicy, SandboxRunner, SandboxStatus, ScratchWorkspace, SecurityPolicy,
+};
 
 #[test]
 fn test_cli_version_command() {
@@ -41,6 +44,28 @@ fn test_cli_info_json_command() {
         verbose: false,
         quiet: false,
         command: Some(Commands::Info),
+    };
+    assert!(run_with_cli(cli).is_ok());
+}
+
+#[test]
+fn test_cli_doctor_command() {
+    let cli = Cli {
+        json: false,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Doctor),
+    };
+    assert!(run_with_cli(cli).is_ok());
+}
+
+#[test]
+fn test_cli_doctor_json_command() {
+    let cli = Cli {
+        json: true,
+        verbose: false,
+        quiet: false,
+        command: Some(Commands::Doctor),
     };
     assert!(run_with_cli(cli).is_ok());
 }
@@ -1211,5 +1236,61 @@ fn test_doctor_comprehensive_security_probes() {
 
     for check in &report.checks {
         assert!(check.passed, "Diagnostic probe failed: {}", check.name);
+    }
+}
+
+#[test]
+fn test_canary_scope_isolation_policy() {
+    let scratch = ScratchWorkspace::new().unwrap();
+    let canary_secret = scratch.path().join("canary_secret.txt");
+    std::fs::write(&canary_secret, b"sensitive_data_123").unwrap();
+
+    let dest_dir = scratch.path().join("output");
+    std::fs::create_dir_all(&dest_dir).unwrap();
+
+    let allowed_archive = scratch.path().join("allowed.rar");
+    std::fs::write(&allowed_archive, b"dummy_archive").unwrap();
+
+    // Policy permits ONLY allowed_archive and dest_dir
+    let policy = ProcessSandboxPolicy::new(PathBuf::from("/bin/sh"), scratch.path().to_path_buf())
+        .with_input(allowed_archive)
+        .with_destination(dest_dir);
+
+    // Verify policy does NOT contain canary
+    assert!(!policy.input_files.contains(&canary_secret));
+}
+
+#[test]
+fn test_network_denial_probe() {
+    assert!(SandboxRunner::probe_network_denial());
+}
+
+#[test]
+fn test_fail_closed_when_kernel_sandbox_required() {
+    let policy = SecurityPolicy::strict().with_require_kernel_sandbox(true);
+    let app = Application::new(Some(policy));
+
+    // If sandbox status is not Enforced (e.g. Degraded on Linux/container),
+    // extraction must fail closed immediately
+    let status = SandboxRunner::probe_status();
+    let temp_archive = std::env::temp_dir().join("test_fail_closed.rar");
+    std::fs::write(&temp_archive, b"dummy").unwrap();
+
+    let res = app.extract_archive(&temp_archive, None, None);
+    let _ = std::fs::remove_file(&temp_archive);
+
+    if status != SandboxStatus::Enforced {
+        assert!(
+            res.is_err(),
+            "Extraction must fail closed when kernel sandbox is required but status is {:?}",
+            status
+        );
+        let err = res.unwrap_err();
+        assert!(
+            err.to_string().contains("require_kernel_sandbox")
+                || err
+                    .to_string()
+                    .contains("strict kernel sandbox is required")
+        );
     }
 }

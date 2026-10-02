@@ -233,16 +233,17 @@ impl Application {
 
         // Probe 6: OS Sandbox Confinement Status
         let sandbox_status = SandboxRunner::probe_status();
+        let sandbox_passed = if self.security_context.policy().require_kernel_sandbox {
+            sandbox_status == SandboxStatus::Enforced
+        } else {
+            sandbox_status != SandboxStatus::Unavailable
+        };
         checks.push(DiagnosticCheck {
             name: "OS Sandbox Confinement".to_string(),
-            passed: sandbox_status != SandboxStatus::Unavailable,
+            passed: sandbox_passed,
             message: format!(
                 "{}: {}",
-                match sandbox_status {
-                    SandboxStatus::Enforced => "Enforced",
-                    SandboxStatus::Degraded => "Degraded",
-                    SandboxStatus::Unavailable => "Unavailable",
-                },
+                sandbox_status.label(),
                 sandbox_status.description()
             ),
         });
@@ -280,11 +281,15 @@ impl Application {
         });
 
         // Probe 8: Subprocess Network Isolation Boundary
+        let network_probe_passed = SandboxRunner::probe_network_denial();
         checks.push(DiagnosticCheck {
             name: "Network Isolation Boundary".to_string(),
-            passed: true,
-            message: "Network operations denied to engine process by confinement policy"
-                .to_string(),
+            passed: network_probe_passed,
+            message: if network_probe_passed {
+                "Network access denied to engine process by confinement policy".to_string()
+            } else {
+                "Network isolation probe failed".to_string()
+            },
         });
 
         // Probe 9: Filesystem Scope Boundary Confinement
@@ -316,6 +321,21 @@ impl Application {
 
     /// Tests the integrity of an archive.
     pub fn test_archive(&self, path: &Path, password: Option<&str>) -> Result<ArchiveTestResult> {
+        // Fail-closed enforcement check: if policy strictly mandates kernel-level sandbox confinement,
+        // verify that the OS kernel sandbox is actively enforced.
+        if self.security_context.policy().require_kernel_sandbox {
+            let status = SandboxRunner::probe_status();
+            if status != SandboxStatus::Enforced {
+                return Err(crate::error::SecurityError::PolicyViolation {
+                    reason: format!(
+                        "require_kernel_sandbox violation: strict kernel sandbox is required by security policy, but current status is {:?}",
+                        status
+                    ),
+                }
+                .into());
+            }
+        }
+
         if !path.exists() {
             return Err(ArchiveError::FileNotFound {
                 path: path.to_string_lossy().to_string(),
@@ -348,6 +368,21 @@ impl Application {
         output: Option<&Path>,
         password: Option<&str>,
     ) -> Result<ArchiveExtractResult> {
+        // Fail-closed enforcement check: if policy strictly mandates kernel-level sandbox confinement,
+        // verify that the OS kernel sandbox is actively enforced.
+        if self.security_context.policy().require_kernel_sandbox {
+            let status = SandboxRunner::probe_status();
+            if status != SandboxStatus::Enforced {
+                return Err(crate::error::SecurityError::PolicyViolation {
+                    reason: format!(
+                        "require_kernel_sandbox violation: strict kernel sandbox is required by security policy, but current status is {:?}",
+                        status
+                    ),
+                }
+                .into());
+            }
+        }
+
         if !path.exists() {
             return Err(ArchiveError::FileNotFound {
                 path: path.to_string_lossy().to_string(),

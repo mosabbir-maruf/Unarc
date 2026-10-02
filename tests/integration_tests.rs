@@ -113,22 +113,22 @@ fn test_interactive_commands_execution() {
 
 #[test]
 fn test_pinned_engine_metadata() {
-    assert_eq!(PINNED_7ZIP_VERSION, "24.09");
+    assert_eq!(PINNED_7ZIP_VERSION, "26.03");
     assert_eq!(
         PINNED_7ZIP_RELEASE_URL,
-        "https://github.com/ip7z/7zip/releases/tag/24.09"
+        "https://github.com/ip7z/7zip/releases/tag/26.03"
     );
     assert_eq!(
         EXPECTED_SHA256_MACOS,
-        "bd5765978a541323758d82ad1d30df76a2e3c86341f12d6b0524d837411e9b4a"
+        "5ca87677072c59f5602e5c49baa27d4694bacd2259b4e507f0094249d4281480"
     );
     assert_eq!(
         EXPECTED_SHA256_LINUX_ARM64,
-        "ea6a2595eba6441e1e60ddaa47d73d849e99ef2ba18d3f386557cdcb9dc9cebd"
+        "2389ba20e4d8295e8709c20b6263b69bd1ec4972fe38a04ad7a1badbf595b996"
     );
     assert_eq!(
         EXPECTED_SHA256_LINUX_X64,
-        "9a556170350dafb60a97348b86a94b087d97fd36007760691576cac0d88b132b"
+        "dc99eff5008f1ab79bd7084c68513701547a808a89502bf4133683535ab3c695"
     );
 }
 

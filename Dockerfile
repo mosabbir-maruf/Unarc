@@ -8,20 +8,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned 7-Zip version: 24.09
+# Pinned 7-Zip version: 26.03
 # Target architecture: aarch64 (linux-arm64) or x86_64 (linux-x64)
 RUN ARCH=$(uname -m) && \
     mkdir -p /opt/unarc/bin && \
     if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
-        EXPECTED_SHA="fbe331697c9417bbc06fc92d3f4576dca6a5a1442fad7ae810304446a9153e2c"; \
-        TAR_FILE="7z2409-linux-arm64.tar.xz"; \
+        EXPECTED_SHA="2389ba20e4d8295e8709c20b6263b69bd1ec4972fe38a04ad7a1badbf595b996"; \
+        TAR_FILE="7z2603-linux-arm64.tar.xz"; \
     elif [ "$ARCH" = "x86_64" ]; then \
-        EXPECTED_SHA="914c7e20ad5ef8e4d3cf08620ff8894b28fe11b7eb99809d6930870fbe48a281"; \
-        TAR_FILE="7z2409-linux-x64.tar.xz"; \
+        EXPECTED_SHA="dc99eff5008f1ab79bd7084c68513701547a808a89502bf4133683535ab3c695"; \
+        TAR_FILE="7z2603-linux-x64.tar.xz"; \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    curl -sSL "https://github.com/ip7z/7zip/releases/download/24.09/${TAR_FILE}" -o "/tmp/${TAR_FILE}" && \
+    curl -sSL "https://github.com/ip7z/7zip/releases/download/26.03/${TAR_FILE}" -o "/tmp/${TAR_FILE}" && \
     echo "${EXPECTED_SHA}  /tmp/${TAR_FILE}" | sha256sum -c - && \
     tar -xJf "/tmp/${TAR_FILE}" -C /opt/unarc/bin 7zz && \
     chmod 0755 /opt/unarc/bin/7zz && \

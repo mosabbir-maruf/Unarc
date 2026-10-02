@@ -40,15 +40,15 @@ pub const SUGGESTIONS: &[CommandSuggestion] = &[
     },
     CommandSuggestion {
         command: "/doctor",
-        description: "Run diagnostic health check on engine and environment",
+        description: "Run diagnostic health check and engine probe",
     },
     CommandSuggestion {
         command: "/update",
-        description: "Inspect engine pinning and hermetic update status",
+        description: "Engine updater (deferred to future phase)",
     },
     CommandSuggestion {
         command: "/config",
-        description: "Show active zero-trust security policy constraints",
+        description: "Runtime configuration (deferred to future phase)",
     },
     CommandSuggestion {
         command: "/help",
@@ -284,12 +284,17 @@ pub fn execute_interactive_command(
             Ok(())
         }
         "/update" | "update" => {
-            let engine = app.engine_info();
-            formatter.print_engine_update(&engine);
+            formatter.print_deferred_command(
+                "/update",
+                "Unarc utilizes build-time pinned engines. Dynamic runtime updating is deferred to a future phase.",
+            );
             Ok(())
         }
         "/config" | "config" => {
-            formatter.print_config(app.policy());
+            formatter.print_deferred_command(
+                "/config",
+                "Runtime configuration editing is deferred to a future phase. Currently enforcing zero-trust policy defaults.",
+            );
             Ok(())
         }
         "/help" | "help" => {

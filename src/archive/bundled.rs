@@ -9,22 +9,22 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// Exact pinned 7-Zip version.
-pub const PINNED_7ZIP_VERSION: &str = "24.09";
+pub const PINNED_7ZIP_VERSION: &str = "26.03";
 
 /// Exact official source release location.
-pub const PINNED_7ZIP_RELEASE_URL: &str = "https://github.com/ip7z/7zip/releases/tag/24.09";
+pub const PINNED_7ZIP_RELEASE_URL: &str = "https://github.com/ip7z/7zip/releases/tag/26.03";
 
-/// Expected SHA-256 for macOS universal binary (`7zz-mac`).
+/// Expected SHA-256 for macOS archive (`7z2603-mac.tar.xz`).
 pub const EXPECTED_SHA256_MACOS: &str =
-    "bd5765978a541323758d82ad1d30df76a2e3c86341f12d6b0524d837411e9b4a";
+    "5ca87677072c59f5602e5c49baa27d4694bacd2259b4e507f0094249d4281480";
 
-/// Expected SHA-256 for Linux ARM64 binary (`7zz-linux-arm64`).
+/// Expected SHA-256 for Linux ARM64 archive (`7z2603-linux-arm64.tar.xz`).
 pub const EXPECTED_SHA256_LINUX_ARM64: &str =
-    "ea6a2595eba6441e1e60ddaa47d73d849e99ef2ba18d3f386557cdcb9dc9cebd";
+    "2389ba20e4d8295e8709c20b6263b69bd1ec4972fe38a04ad7a1badbf595b996";
 
-/// Expected SHA-256 for Linux x86_64 binary (`7zz-linux-x64`).
+/// Expected SHA-256 for Linux x86_64 archive (`7z2603-linux-x64.tar.xz`).
 pub const EXPECTED_SHA256_LINUX_X64: &str =
-    "9a556170350dafb60a97348b86a94b087d97fd36007760691576cac0d88b132b";
+    "dc99eff5008f1ab79bd7084c68513701547a808a89502bf4133683535ab3c695";
 
 /// Formats supported by the bundled 7zz engine.
 static SUPPORTED_FORMATS: &[ArchiveFormat] = &[
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_pinned_version_constants() {
-        assert_eq!(PINNED_7ZIP_VERSION, "24.09");
+        assert_eq!(PINNED_7ZIP_VERSION, "26.03");
         assert_eq!(EXPECTED_SHA256_MACOS.len(), 64);
         assert_eq!(EXPECTED_SHA256_LINUX_ARM64.len(), 64);
         assert_eq!(EXPECTED_SHA256_LINUX_X64.len(), 64);

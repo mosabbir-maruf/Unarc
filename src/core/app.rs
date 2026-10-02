@@ -34,6 +34,19 @@ pub struct EngineInfo {
     pub is_available: bool,
 }
 
+/// An individual diagnostic probe result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticCheck {
+    /// Name of the diagnostic probe.
+    pub name: String,
+
+    /// Whether the probe succeeded.
+    pub passed: bool,
+
+    /// Descriptive outcome or error message.
+    pub message: String,
+}
+
 /// Diagnostic health report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoctorReport {
@@ -45,6 +58,9 @@ pub struct DoctorReport {
 
     /// Active security configuration.
     pub policy: SecurityPolicy,
+
+    /// Diagnostic probe outcomes.
+    pub checks: Vec<DiagnosticCheck>,
 
     /// Overall operational health status.
     pub healthy: bool,
@@ -130,15 +146,94 @@ impl Application {
         }
     }
 
-    /// Runs a comprehensive system and engine health check.
+    /// Runs a comprehensive system and engine health check with active diagnostic probes.
     #[must_use]
     pub fn doctor_check(&self) -> DoctorReport {
         let engine = self.engine_info();
-        let healthy = engine.is_available;
+        let mut checks = Vec::new();
+
+        // Probe 1: Platform & Architecture Detection
+        checks.push(DiagnosticCheck {
+            name: "Platform Detection".to_string(),
+            passed: true,
+            message: format!("{}-{}", self.platform_info.os, self.platform_info.arch),
+        });
+
+        // Probe 2: Bundled Engine Resolution
+        let engine_resolved = engine.resolved_path.is_some();
+        checks.push(DiagnosticCheck {
+            name: "Bundled Engine Resolution".to_string(),
+            passed: engine_resolved,
+            message: engine
+                .resolved_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "Bundled 7zz engine not found in search paths".to_string()),
+        });
+
+        // Probe 3: Bundled Engine Execution Probe
+        let mut exec_probe_passed = false;
+        let exec_message = if let Some(ref path) = engine.resolved_path {
+            match std::process::Command::new(path).arg("i").output() {
+                Ok(out) => {
+                    let out_str = String::from_utf8_lossy(&out.stdout);
+                    if out.status.success() && out_str.contains("7-Zip") {
+                        exec_probe_passed = true;
+                        format!("Engine execution successful (v{})", PINNED_7ZIP_VERSION)
+                    } else {
+                        format!("Engine execution failed with exit code: {:?}", out.status)
+                    }
+                }
+                Err(e) => format!("Failed to spawn engine binary: {e}"),
+            }
+        } else {
+            "Engine execution probe skipped: engine binary not located".to_string()
+        };
+
+        checks.push(DiagnosticCheck {
+            name: "Engine Execution Probe".to_string(),
+            passed: exec_probe_passed,
+            message: exec_message,
+        });
+
+        // Probe 4: Temp/Scratch Filesystem Access
+        let temp_probe = std::env::temp_dir().join(".unarc_doctor_probe");
+        let temp_passed = match std::fs::write(&temp_probe, b"probe") {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&temp_probe);
+                true
+            }
+            Err(_) => false,
+        };
+        checks.push(DiagnosticCheck {
+            name: "Filesystem Scratch Workspace".to_string(),
+            passed: temp_passed,
+            message: if temp_passed {
+                "Temporary directory is accessible and writable".to_string()
+            } else {
+                "Unable to write to temporary workspace directory".to_string()
+            },
+        });
+
+        // Probe 5: Security Policy Integrity
+        let traversal_check = self.validate_path(Path::new("../escape.txt")).is_err();
+        checks.push(DiagnosticCheck {
+            name: "Zero-Trust Policy Enforcement".to_string(),
+            passed: traversal_check,
+            message: if traversal_check {
+                "Traversal defense and containment verified".to_string()
+            } else {
+                "Security policy failed traversal rejection test".to_string()
+            },
+        });
+
+        let healthy = checks.iter().all(|c| c.passed);
+
         DoctorReport {
             platform: self.platform_info.clone(),
             engine,
             policy: self.security_context.policy().clone(),
+            checks,
             healthy,
         }
     }
@@ -255,7 +350,7 @@ mod tests {
         let app = Application::default();
         let info = app.app_info();
         assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(info.engine.pinned_version, "24.09");
+        assert_eq!(info.engine.pinned_version, "26.03");
         assert!(!info.policy.allow_absolute_paths);
     }
 
@@ -263,7 +358,8 @@ mod tests {
     fn test_doctor_check() {
         let app = Application::default();
         let doc = app.doctor_check();
-        assert_eq!(doc.engine.pinned_version, "24.09");
+        assert_eq!(doc.engine.pinned_version, "26.03");
+        assert!(!doc.checks.is_empty());
     }
 
     #[test]

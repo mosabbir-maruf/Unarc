@@ -79,13 +79,13 @@ Unarc preserves strict unidirectional dependencies, completely isolating present
 
 ## 2. Phase 2 Architectural Decisions
 
-### Decision 1: Bundled & Pinned 7-Zip Engine (v24.09)
-- **Version**: `24.09` (official Igor Pavlov release)
-- **Source**: `https://github.com/ip7z/7zip/releases/tag/24.09`
+### Decision 1: Bundled & Pinned 7-Zip Engine (v26.03)
+- **Version**: `26.03` (official Igor Pavlov release)
+- **Source**: `https://github.com/ip7z/7zip/releases/tag/26.03`
 - **Target Architectures & SHA-256**:
-  - macOS (Universal `aarch64` + `x86_64`): `bd5765978a541323758d82ad1d30df76a2e3c86341f12d6b0524d837411e9b4a`
-  - Linux ARM64 (`aarch64`): `ea6a2595eba6441e1e60ddaa47d73d849e99ef2ba18d3f386557cdcb9dc9cebd`
-  - Linux x86_64 (`x86_64`): `9a556170350dafb60a97348b86a94b087d97fd36007760691576cac0d88b132b`
+  - macOS (7z2603-mac.tar.xz): `5ca87677072c59f5602e5c49baa27d4694bacd2259b4e507f0094249d4281480`
+  - Linux ARM64 (7z2603-linux-arm64.tar.xz): `2389ba20e4d8295e8709c20b6263b69bd1ec4972fe38a04ad7a1badbf595b996`
+  - Linux x86_64 (7z2603-linux-x64.tar.xz): `dc99eff5008f1ab79bd7084c68513701547a808a89502bf4133683535ab3c695`
 - **Hermetic Guarantee**:
   - The engine is verified at build-time by SHA-256.
   - Zero runtime network requests are made.

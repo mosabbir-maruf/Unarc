@@ -158,15 +158,36 @@ impl OutputFormatter {
             } else {
                 self.style("ATTENTION NEEDED", "\x1b[1;31m")
             };
-            println!("System Diagnostics Doctor: [{}]", status);
-            println!("  OS:             {}", report.platform.os);
-            println!("  Arch:           {}", report.platform.arch);
+            println!("System Diagnostics Doctor: [{status}]");
+            println!(
+                "  Platform:       {}-{}",
+                report.platform.os, report.platform.arch
+            );
             println!("  Pinned Engine:  v{}", report.engine.pinned_version);
-            println!("  Engine Ready:   {}", report.engine.is_available);
-            if let Some(ref p) = report.engine.resolved_path {
-                println!("  Engine Path:    {}", p.display());
+            println!("  Diagnostic Probes:");
+            for check in &report.checks {
+                let badge = if check.passed {
+                    self.style("PASS", "\x1b[1;32m")
+                } else {
+                    self.style("FAIL", "\x1b[1;31m")
+                };
+                println!("    [{badge}] {:<30} {}", check.name, check.message);
             }
-            println!("  Zero-Trust:     Enforced");
+        }
+    }
+
+    /// Explicitly communicates deferred feature status without placeholder architecture.
+    pub fn print_deferred_command(&self, cmd: &str, explanation: &str) {
+        if self.json_mode {
+            let val = json!({
+                "status": "not_available_yet",
+                "command": cmd,
+                "message": explanation
+            });
+            println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+        } else if !self.quiet {
+            println!("Command '{cmd}' is not available yet.");
+            println!("  Notice: {explanation}");
         }
     }
 

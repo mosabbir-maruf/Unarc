@@ -20,11 +20,11 @@ Designed targeting **macOS Apple Silicon** first, with full **Docker/Linux** dev
 
 | Attribute | Value |
 |---|---|
-| **Version** | `24.09` |
-| **Release Location** | `https://github.com/ip7z/7zip/releases/tag/24.09` |
-| **macOS (Universal arm64/x86_64)** | `bd5765978a541323758d82ad1d30df76a2e3c86341f12d6b0524d837411e9b4a` |
-| **Linux ARM64 (aarch64)** | `ea6a2595eba6441e1e60ddaa47d73d849e99ef2ba18d3f386557cdcb9dc9cebd` |
-| **Linux x86_64** | `9a556170350dafb60a97348b86a94b087d97fd36007760691576cac0d88b132b` |
+| **Version** | `26.03` |
+| **Release Location** | `https://github.com/ip7z/7zip/releases/tag/26.03` |
+| **macOS (7z2603-mac.tar.xz)** | `5ca87677072c59f5602e5c49baa27d4694bacd2259b4e507f0094249d4281480` |
+| **Linux ARM64 (7z2603-linux-arm64.tar.xz)** | `2389ba20e4d8295e8709c20b6263b69bd1ec4972fe38a04ad7a1badbf595b996` |
+| **Linux x86_64 (7z2603-linux-x64.tar.xz)** | `dc99eff5008f1ab79bd7084c68513701547a808a89502bf4133683535ab3c695` |
 
 ---
 

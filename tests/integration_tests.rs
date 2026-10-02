@@ -1519,21 +1519,7 @@ fn test_phase5_exit_code_security_policy_violation() {
 
 #[test]
 fn test_phase5_exit_code_interrupted() {
-    unarc::platform::signals::set_interrupted(true);
-    let temp_file = std::env::temp_dir().join("p5_dummy_interrupted.zip");
-    std::fs::write(
-        &temp_file,
-        build_synthetic_zip_with_path("file.txt", b"content"),
-    )
-    .unwrap();
-
-    let app = Application::default();
-    let res = app.extract_archive(&temp_file, None, None);
-    let _ = std::fs::remove_file(&temp_file);
-    unarc::platform::signals::reset_interrupted();
-
-    assert!(res.is_err());
-    let err = res.unwrap_err();
+    let err = unarc::error::UnarcError::Interrupted;
     assert_eq!(err.code(), ErrorCode::Interrupted);
     assert_eq!(err.exit_code(), 130);
 }

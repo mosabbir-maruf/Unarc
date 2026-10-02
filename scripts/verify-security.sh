@@ -20,11 +20,14 @@ if [ ! -x "${ENGINE}" ]; then
 fi
 
 echo "[1/7] Testing Native Doctor Probe & Health Check..."
-"${BIN}" doctor
+DOCTOR_OUTPUT="$("${BIN}" doctor)"
+echo "${DOCTOR_OUTPUT}"
 DOCTOR_JSON="$("${BIN}" doctor --json)"
 echo "${DOCTOR_JSON}" | grep -q '"pinned_version": "26.03"'
 echo "${DOCTOR_JSON}" | grep -q '"is_apple_silicon": true'
-echo "  -> Doctor probe passed."
+echo "${DOCTOR_OUTPUT}" | grep -q "OS Sandbox Confinement.*ENFORCED"
+echo "${DOCTOR_JSON}" | grep -q '"message": "ENFORCED:'
+echo "  -> Doctor probe passed with ENFORCED OS sandbox confinement."
 
 echo "[2/7] Testing Canary File Scope Isolation (Read Denial)..."
 CANARY_SECRET="/tmp/unarc_canary_secret_$(date +%s).txt"

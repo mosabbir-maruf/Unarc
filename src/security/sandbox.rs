@@ -231,7 +231,12 @@ impl SandboxRunner {
                     (deny default)\
                     (deny network*)\
                     (allow process-exec (literal \"/bin/echo\"))\
-                    (allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/System/Volumes\"))";
+                    (allow process-fork)\
+                    (allow sysctl-read)\
+                    (allow mach-lookup)\
+                    (allow file-read-metadata (subpath \"/\"))\
+                    (allow file-read-data (literal \"/\"))\
+                    (allow file-read-data (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/System/Volumes\") (subpath \"/dev\"))";
                 match Command::new("/usr/bin/sandbox-exec")
                     .args(["-p", test_profile, "/bin/echo", "probe"])
                     .output()
@@ -243,15 +248,11 @@ impl SandboxRunner {
                         SandboxStatus::Enforced
                     }
                     _ => {
-                        if probe_process_isolation() {
-                            SandboxStatus::Degraded
-                        } else {
-                            SandboxStatus::Unavailable
-                        }
+                        // On macOS, if Seatbelt cannot be enforced (e.g. nested sandbox or permission denied),
+                        // the truthful state is Unavailable (process isolation is not a substitute for OS-level confinement).
+                        SandboxStatus::Unavailable
                     }
                 }
-            } else if probe_process_isolation() {
-                SandboxStatus::Degraded
             } else {
                 SandboxStatus::Unavailable
             }
@@ -289,7 +290,16 @@ impl SandboxRunner {
                     (deny default)\
                     (deny network*)\
                     (allow process-exec (literal \"/usr/bin/nc\"))\
-                    (allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/System/Volumes\") (subpath \"/dev\"))";
+                    (allow process-fork)\
+                    (allow sysctl-read)\
+                    (allow mach-lookup)\
+                    (allow file-read-metadata (subpath \"/\"))\
+                    (allow file-read-data (literal \"/\"))\
+                    (allow file-read-data file-read-metadata\
+                        (subpath \"/usr/lib\")\
+                        (subpath \"/System/Library\")\
+                        (subpath \"/System/Volumes\")\
+                        (subpath \"/dev\"))";
                 match Command::new("/usr/bin/sandbox-exec")
                     .args([
                         "-p",
@@ -430,6 +440,7 @@ fn apply_process_isolation(cmd: &mut Command, policy: &ProcessSandboxPolicy) {
 }
 
 /// Helper probing whether basic process isolation and environment scrubbing is functional.
+#[cfg(not(target_os = "macos"))]
 fn probe_process_isolation() -> bool {
     // 1. Try bundled engine first (hermetic, works in distroless where /bin/sh is absent)
     if let Ok(engine) = crate::archive::bundled::resolve_bundled_engine() {
@@ -489,6 +500,8 @@ fn generate_macos_seatbelt_profile(policy: &ProcessSandboxPolicy) -> String {
     profile.push_str("(allow mach-lookup)\n");
 
     // Standard runtime, dynamic linker, and system library dependencies
+    profile.push_str("(allow file-read-metadata (subpath \"/\"))\n");
+    profile.push_str("(allow file-read-data (literal \"/\"))\n");
     profile.push_str("(allow file-read-data file-read-metadata\n");
     profile.push_str("    (subpath \"/usr/lib\")\n");
     profile.push_str("    (subpath \"/System/Library\")\n");

@@ -128,3 +128,60 @@ Unarc preserves strict unidirectional dependencies, completely isolating present
 ### Decision 5: Non-TTY and Color Handling
 - If `NO_COLOR` is present in the environment, ANSI escape sequences are completely suppressed.
 - If standard input is non-interactive (e.g. piped or redirected), Unarc automatically falls back to line-by-line streaming without attempting raw terminal mode manipulation.
+
+---
+
+## 3. Phase 4 Architectural Decisions: OS-Level Security Boundary & Process Confinement
+
+### Decision 1: Untrusted Execution Model for Bundled Engine
+- The pinned 7zz binary is treated strictly as an **untrusted execution component**.
+- Application-level path sanitation (Zip Slip traversal defense, depth limits) remains active and is now backed by real **OS/process kernel containment**.
+
+### Decision 2: Multi-Layered Subprocess Confinement
+- **`src/security/sandbox.rs` (`ProcessSandboxPolicy`)**:
+  - Explicit containment boundaries defining:
+    - `input_files`: Strictly resolved multipart volumes granted **read-only** access.
+    - `destination_dir`: Explicitly designated extraction root granted **read-write** access.
+    - `scratch_dir`: Dedicated per-operation temporary directory with guaranteed RAII cleanup.
+    - `deny_network`: Denies all network operations (loopback, internet, sockets).
+- **macOS Native Seatbelt Isolation (`sandbox-exec`)**:
+  - Dynamically synthesizes native Seatbelt Profile Language (SBPL) profiles confining the 7zz process.
+  - Denies `network*` entirely.
+  - Restricts file reads strictly to: engine executable, system dynamic libraries (`/usr/lib`, `/System/Library`, `/usr/share`, `/dev`), and the explicitly resolved archive volumes.
+  - Restricts file writes strictly to the designated output destination and isolated scratch directory.
+  - Prevents the engine from accessing user home directories, SSH keys, credentials, browser data, and unrelated directories.
+- **Linux & Container Isolation Contract**:
+  - Drops privileges using `PR_SET_NO_NEW_PRIVS`.
+  - Pairs with Linux Landlock filesystem LSM where kernel support is present.
+  - Operates cleanly within hardened Docker container boundaries.
+
+### Decision 3: Subprocess Lifecycle & Anti-Orphan Guarantees
+- **Process Group Isolation**:
+  - Every child process is spawned in an independent process group (`setpgid(0, 0)`).
+- **Kernel Death Signal Hook (`PR_SET_PDEATHSIG`)**:
+  - On Linux, instructs the kernel to deliver `SIGKILL` to the child process tree immediately if Unarc is terminated or crashes.
+- **RAII Process Termination (`ChildProcessGuard`)**:
+  - Wraps spawned `std::process::Child`.
+  - On `Drop` (e.g. panic, signal, cancellation, or error), sends `SIGTERM` to the entire process group (`-pgid`), waits a brief grace period, and escalates to `SIGKILL` if still alive, reaping the child.
+  - Active process group tracking (`ACTIVE_PGID`) ensures clean immediate cleanup on SIGINT/SIGTERM.
+
+### Decision 4: Environment Variable Scrubbing & Secrets Hygiene
+- Subprocess invocations invoke `.env_clear()`, stripping all ambient parent environment variables.
+- Host credentials (`AWS_*`, `SSH_AUTH_SOCK`, `GITHUB_TOKEN`, tokens, user secrets) are never leaked to the engine subprocess.
+- Passes only the strictly minimal execution variables: `PATH` (`/usr/bin:/bin:/usr/local/bin`), `LANG` (`C.UTF-8`), `LC_ALL` (`C.UTF-8`), and `TMPDIR` (`scratch_dir`).
+
+### Decision 5: Defense Against Special Nodes & Symlink TOCTOU
+- Extraction flags `-snl-` (no symlinks) and `-snh-` (no hardlinks) are passed to the engine.
+- Post-extraction safety verification traverses the output directory using `symlink_metadata` (never following symlinks):
+  - Detects and immediately deletes any unauthorized symlinks (`is_symlink()`).
+  - Detects and rejects hardlinks (`nlink() > 1`).
+  - Detects and rejects special filesystem nodes (`is_fifo()`, `is_char_device()`, `is_block_device()`, `is_socket()`).
+  - Verifies canonical containment (`canon.starts_with(dest_canonical)`).
+
+### Decision 6: Transparent Security Diagnostics (`doctor`)
+- Probes and reports real security posture without security theater:
+  - `OS Sandbox Confinement`: Reports `Enforced` (macOS Seatbelt / Linux Landlock), `Degraded` (containerized process isolation active), or `Unavailable`.
+  - `Environment Secrets Hygiene`: Verifies ambient environment scrubbing.
+  - `Network Isolation Boundary`: Verifies network denial.
+  - `Filesystem Scope Confinement`: Verifies read-only input and output write containment.
+

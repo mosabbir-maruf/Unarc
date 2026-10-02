@@ -970,3 +970,246 @@ fn test_streamed_extraction_large_payload() {
     let _ = std::fs::remove_file(large_zip);
     let _ = std::fs::remove_dir_all(out_dir);
 }
+
+fn build_synthetic_zip_with_symlink(link_name: &str, target: &str) -> Vec<u8> {
+    let mut zip = Vec::new();
+    let name_bytes = link_name.as_bytes();
+    let content = target.as_bytes();
+    let crc = calculate_crc32(content);
+
+    let local_header_offset = zip.len() as u32;
+    zip.extend_from_slice(b"PK\x03\x04");
+    zip.extend_from_slice(&20u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&crc.to_le_bytes());
+    zip.extend_from_slice(&(content.len() as u32).to_le_bytes());
+    zip.extend_from_slice(&(content.len() as u32).to_le_bytes());
+    zip.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(name_bytes);
+    zip.extend_from_slice(content);
+
+    let central_dir_offset = zip.len() as u32;
+    zip.extend_from_slice(b"PK\x01\x02");
+    zip.extend_from_slice(&0x0314u16.to_le_bytes()); // Unix 2.0
+    zip.extend_from_slice(&20u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&crc.to_le_bytes());
+    zip.extend_from_slice(&(content.len() as u32).to_le_bytes());
+    zip.extend_from_slice(&(content.len() as u32).to_le_bytes());
+    zip.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    // Unix mode: S_IFLNK (0o120000 = 0xA000) | 0o777 = 0xA1FF0000
+    zip.extend_from_slice(&0xA1FF0000u32.to_le_bytes());
+    zip.extend_from_slice(&local_header_offset.to_le_bytes());
+    zip.extend_from_slice(name_bytes);
+
+    let central_dir_size = (zip.len() as u32) - central_dir_offset;
+    zip.extend_from_slice(b"PK\x05\x06");
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+    zip.extend_from_slice(&1u16.to_le_bytes());
+    zip.extend_from_slice(&1u16.to_le_bytes());
+    zip.extend_from_slice(&central_dir_size.to_le_bytes());
+    zip.extend_from_slice(&central_dir_offset.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes());
+
+    zip
+}
+
+#[test]
+fn test_adversarial_symlink_rejection() {
+    let temp_dir = std::env::temp_dir();
+    let symlink_zip = temp_dir.join("evil_symlink.zip");
+    let out_dir = temp_dir.join("evil_symlink_out");
+
+    let zip_bytes = build_synthetic_zip_with_symlink("malicious_link.txt", "/etc/passwd");
+    std::fs::write(&symlink_zip, &zip_bytes).unwrap();
+
+    let app = Application::default();
+    let res = app.extract_archive(&symlink_zip, Some(&out_dir), None);
+
+    // Extraction should either reject before extract or post-extract verify
+    assert!(
+        res.is_err(),
+        "Expected symlink extraction to fail under strict zero-trust policy"
+    );
+
+    // Target link must not exist
+    assert!(!out_dir.join("malicious_link.txt").is_symlink());
+
+    let _ = std::fs::remove_file(symlink_zip);
+    let _ = std::fs::remove_dir_all(out_dir);
+}
+
+#[test]
+fn test_adversarial_hardlink_rejection() {
+    #[cfg(unix)]
+    {
+        let temp_dir = std::env::temp_dir();
+        let out_dir = temp_dir.join("test_hardlink_dest");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let orig = out_dir.join("original.txt");
+        let link = out_dir.join("hardlink.txt");
+        std::fs::write(&orig, b"data").unwrap();
+        std::fs::hard_link(&orig, &link).unwrap();
+
+        let app = Application::default();
+        let mut dummy_res = unarc::archive::backend::ArchiveExtractResult {
+            archive_path: PathBuf::from("dummy.zip"),
+            destination: out_dir.clone(),
+            format: unarc::archive::ArchiveFormat::Zip,
+            entries_extracted: None,
+            total_bytes_extracted: None,
+        };
+
+        // Calling post-extraction verification directly should detect and reject the hardlink
+        let verify_res = app.verify_destination_containment(&out_dir, &mut dummy_res);
+        assert!(
+            verify_res.is_err(),
+            "Expected hardlink to be detected and rejected"
+        );
+
+        let _ = std::fs::remove_dir_all(out_dir);
+    }
+}
+
+#[test]
+fn test_adversarial_fifo_and_special_node_rejection() {
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+
+        let temp_dir = std::env::temp_dir();
+        let out_dir = temp_dir.join("test_fifo_dest");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let fifo_path = out_dir.join("test_fifo.pipe");
+        let c_path = CString::new(fifo_path.to_str().unwrap()).unwrap();
+        unsafe {
+            libc::mkfifo(c_path.as_ptr(), 0o666);
+        }
+
+        assert!(fifo_path.exists());
+
+        let app = Application::default();
+        let mut dummy_res = unarc::archive::backend::ArchiveExtractResult {
+            archive_path: PathBuf::from("dummy.zip"),
+            destination: out_dir.clone(),
+            format: unarc::archive::ArchiveFormat::Zip,
+            entries_extracted: None,
+            total_bytes_extracted: None,
+        };
+
+        let verify_res = app.verify_destination_containment(&out_dir, &mut dummy_res);
+        assert!(
+            verify_res.is_err(),
+            "Expected FIFO/special device node to be detected and rejected"
+        );
+
+        // FIFO node must have been deleted upon detection
+        assert!(!fifo_path.exists());
+
+        let _ = std::fs::remove_dir_all(out_dir);
+    }
+}
+
+#[test]
+fn test_adversarial_child_process_termination_on_drop() {
+    let mut cmd = std::process::Command::new("sleep");
+    cmd.arg("60");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let child = cmd.spawn().expect("Spawn sleep must succeed");
+    let pid = child.id() as libc::pid_t;
+    let guard = unarc::security::ChildProcessGuard::new(child, pid);
+
+    assert!(guard.id().is_some());
+
+    // Drop the guard immediately - simulates early error, panic, or cancellation
+    drop(guard);
+
+    // Verify child process was reaped and terminated
+    #[cfg(unix)]
+    unsafe {
+        let res = libc::kill(pid, 0);
+        assert_ne!(res, 0, "Child process must not be running after guard drop");
+    }
+}
+
+#[test]
+fn test_adversarial_environment_secrets_purged() {
+    std::env::set_var("AWS_SECRET_ACCESS_KEY", "AKIAIOSFODNN7EXAMPLE");
+    std::env::set_var("SSH_AUTH_SOCK", "/tmp/sensitive-ssh-agent.sock");
+    std::env::set_var("GITHUB_TOKEN", "ghp_SECRET_TOKEN_1234567890");
+
+    let scratch = unarc::security::ScratchWorkspace::new().unwrap();
+    let policy = unarc::security::ProcessSandboxPolicy::new(
+        PathBuf::from("/bin/sh"),
+        scratch.path().to_path_buf(),
+    );
+
+    let output = unarc::security::SandboxRunner::execute(
+        &policy,
+        ["-c", "echo AWS=${AWS_SECRET_ACCESS_KEY:-NONE} SSH=${SSH_AUTH_SOCK:-NONE} GH=${GITHUB_TOKEN:-NONE}"],
+    )
+    .expect("Sandbox runner execute failed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("AWS=NONE") && stdout.contains("SSH=NONE") && stdout.contains("GH=NONE"),
+        "Subprocess must not inherit ambient host secrets: got {stdout}"
+    );
+
+    std::env::remove_var("AWS_SECRET_ACCESS_KEY");
+    std::env::remove_var("SSH_AUTH_SOCK");
+    std::env::remove_var("GITHUB_TOKEN");
+}
+
+#[test]
+fn test_adversarial_network_isolation_policy() {
+    let scratch = unarc::security::ScratchWorkspace::new().unwrap();
+    let policy = unarc::security::ProcessSandboxPolicy::new(
+        PathBuf::from("/bin/echo"),
+        scratch.path().to_path_buf(),
+    );
+
+    assert!(
+        policy.deny_network,
+        "Confinement policy must enforce deny_network"
+    );
+}
+
+#[test]
+fn test_doctor_comprehensive_security_probes() {
+    let app = Application::default();
+    let report = app.doctor_check();
+
+    assert!(report.healthy);
+
+    // Verify all Phase 4 security probes are reported
+    let probe_names: Vec<&str> = report.checks.iter().map(|c| c.name.as_str()).collect();
+    assert!(probe_names.contains(&"OS Sandbox Confinement"));
+    assert!(probe_names.contains(&"Environment Secrets Hygiene"));
+    assert!(probe_names.contains(&"Network Isolation Boundary"));
+    assert!(probe_names.contains(&"Filesystem Scope Confinement"));
+
+    for check in &report.checks {
+        assert!(check.passed, "Diagnostic probe failed: {}", check.name);
+    }
+}

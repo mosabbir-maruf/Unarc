@@ -4,9 +4,10 @@ use super::backend::{ArchiveBackend, ArchiveExtractResult, ArchiveTestResult};
 use super::format::ArchiveFormat;
 use super::metadata::{ArchiveEntry, ArchiveMetadata};
 use crate::error::ArchiveError;
+use crate::security::{ProcessSandboxPolicy, SandboxRunner, ScratchWorkspace};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 /// Exact pinned 7-Zip version.
 pub const PINNED_7ZIP_VERSION: &str = "26.03";
@@ -101,20 +102,210 @@ impl SevenZipBackend {
         Self
     }
 
-    /// Invokes the bundled 7zz binary with the provided arguments.
-    fn execute_7zz<I, S>(&self, args: I) -> Result<Output, ArchiveError>
+    /// Invokes the bundled 7zz binary confined within the specified sandbox policy.
+    pub fn execute_with_policy<I, S>(
+        &self,
+        args: I,
+        policy: &ProcessSandboxPolicy,
+    ) -> Result<Output, ArchiveError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        SandboxRunner::execute(policy, args)
+    }
+
+    /// Invokes the bundled 7zz binary with an isolated scratch sandbox.
+    fn execute_7zz<I, S>(&self, args: I, input_path: Option<&Path>) -> Result<Output, ArchiveError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
         let engine_path = resolve_bundled_engine()?;
-
-        let mut cmd = Command::new(engine_path);
-        cmd.args(args);
-
-        cmd.output().map_err(|e| ArchiveError::BackendFailure {
+        let scratch = ScratchWorkspace::new().map_err(|e| ArchiveError::BackendFailure {
             backend: "bundled-7zz".to_string(),
-            message: format!("Failed to spawn 7zz process: {e}"),
+            message: format!("Failed to create isolated scratch workspace: {e}"),
+        })?;
+
+        let mut policy = ProcessSandboxPolicy::new(engine_path, scratch.path().to_path_buf());
+        if let Some(p) = input_path {
+            policy = policy.with_input(p.to_path_buf());
+        }
+
+        SandboxRunner::execute(&policy, args)
+    }
+
+    /// Tests the integrity of an archive confined by the given sandbox policy.
+    pub fn test_with_policy(
+        &self,
+        path: &Path,
+        password: Option<&str>,
+        policy: &ProcessSandboxPolicy,
+    ) -> Result<ArchiveTestResult, ArchiveError> {
+        if !path.exists() {
+            return Err(ArchiveError::FileNotFound {
+                path: path.to_string_lossy().to_string(),
+            });
+        }
+
+        let format = ArchiveFormat::from_path(path).unwrap_or(ArchiveFormat::Zip);
+
+        let mut args: Vec<String> = vec![
+            "t".to_string(),
+            "-y".to_string(),
+            "-bso1".to_string(),
+            "-bse2".to_string(),
+        ];
+
+        if let Some(pwd) = password {
+            args.push(format!("-p{pwd}"));
+        } else {
+            args.push("-p".to_string());
+        }
+
+        args.push(path.to_string_lossy().to_string());
+
+        let output = self.execute_with_policy(&args, policy)?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{stdout}\n{stderr}");
+
+        if combined.contains("Cannot find volume")
+            || combined.contains("Can not find volume")
+            || combined.contains("Missing volume")
+            || combined.contains("Cannot open volume")
+        {
+            return Err(ArchiveError::MissingVolume {
+                expected: "next volume".to_string(),
+                details: "Engine reported missing volume during integrity check".to_string(),
+            });
+        }
+
+        if combined.contains("Wrong password")
+            || combined.contains("Can not open encrypted archive")
+            || combined.contains("Data Error in encrypted file")
+        {
+            return if password.is_some() {
+                Err(ArchiveError::InvalidPassword {
+                    path: path.to_string_lossy().to_string(),
+                })
+            } else {
+                Err(ArchiveError::PasswordRequired {
+                    path: path.to_string_lossy().to_string(),
+                })
+            };
+        }
+
+        if !output.status.success() {
+            if combined.contains("Headers Error") || combined.contains("Data Error") {
+                return Err(ArchiveError::CorruptArchive {
+                    message: "Archive headers or data CRC check failed".to_string(),
+                });
+            }
+            return Err(ArchiveError::BackendFailure {
+                backend: "bundled-7zz".to_string(),
+                message: format!("Integrity check returned failure code: {:?}", output.status),
+            });
+        }
+
+        Ok(ArchiveTestResult {
+            path: path.to_path_buf(),
+            format,
+            passed: true,
+            entries_checked: None,
+            message: "Everything is Ok".to_string(),
+        })
+    }
+
+    /// Extracts an archive into the destination directory confined by the given sandbox policy.
+    pub fn extract_with_policy(
+        &self,
+        path: &Path,
+        destination: &Path,
+        password: Option<&str>,
+        policy: &ProcessSandboxPolicy,
+    ) -> Result<ArchiveExtractResult, ArchiveError> {
+        if !path.exists() {
+            return Err(ArchiveError::FileNotFound {
+                path: path.to_string_lossy().to_string(),
+            });
+        }
+
+        // Create destination directory if it does not already exist
+        std::fs::create_dir_all(destination).map_err(|e| ArchiveError::BackendFailure {
+            backend: "bundled-7zz".to_string(),
+            message: format!("Failed to create destination directory: {e}"),
+        })?;
+
+        let format = ArchiveFormat::from_path(path).unwrap_or(ArchiveFormat::Zip);
+
+        let mut args: Vec<String> = vec![
+            "x".to_string(),
+            format!("-o{}", destination.display()),
+            "-y".to_string(),
+            "-snl-".to_string(), // Disable symbolic link extraction for security
+            "-snh-".to_string(), // Disable hard link extraction for security
+            "-bso1".to_string(),
+            "-bse2".to_string(),
+        ];
+
+        if let Some(pwd) = password {
+            args.push(format!("-p{pwd}"));
+        } else {
+            args.push("-p".to_string());
+        }
+
+        args.push(path.to_string_lossy().to_string());
+
+        let output = self.execute_with_policy(&args, policy)?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{stdout}\n{stderr}");
+
+        if combined.contains("Cannot find volume")
+            || combined.contains("Can not find volume")
+            || combined.contains("Missing volume")
+            || combined.contains("Cannot open volume")
+        {
+            return Err(ArchiveError::MissingVolume {
+                expected: "next volume".to_string(),
+                details: "Engine reported missing volume during extraction".to_string(),
+            });
+        }
+
+        if combined.contains("Wrong password")
+            || combined.contains("Can not open encrypted archive")
+            || combined.contains("Data Error in encrypted file")
+        {
+            return if password.is_some() {
+                Err(ArchiveError::InvalidPassword {
+                    path: path.to_string_lossy().to_string(),
+                })
+            } else {
+                Err(ArchiveError::PasswordRequired {
+                    path: path.to_string_lossy().to_string(),
+                })
+            };
+        }
+
+        if !output.status.success() {
+            if combined.contains("Headers Error") || combined.contains("Data Error") {
+                return Err(ArchiveError::CorruptArchive {
+                    message: "Archive contains corrupted files or headers".to_string(),
+                });
+            }
+            return Err(ArchiveError::BackendFailure {
+                backend: "bundled-7zz".to_string(),
+                message: format!("Extraction failed with exit code: {:?}", output.status),
+            });
+        }
+
+        Ok(ArchiveExtractResult {
+            archive_path: path.to_path_buf(),
+            destination: destination.to_path_buf(),
+            format,
+            entries_extracted: None,
+            total_bytes_extracted: None,
         })
     }
 }
@@ -162,7 +353,7 @@ impl ArchiveBackend for SevenZipBackend {
 
         args.push(path.to_string_lossy().to_string());
 
-        let output = self.execute_7zz(&args)?;
+        let output = self.execute_7zz(&args, Some(path))?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -217,7 +408,7 @@ impl ArchiveBackend for SevenZipBackend {
 
         args.push(path.to_string_lossy().to_string());
 
-        let output = self.execute_7zz(&args)?;
+        let output = self.execute_7zz(&args, Some(path))?;
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         let mut entries = Vec::new();
@@ -225,6 +416,7 @@ impl ArchiveBackend for SevenZipBackend {
         let mut cur_size = 0u64;
         let mut cur_packed: Option<u64> = None;
         let mut cur_is_dir = false;
+        let mut cur_is_symlink = false;
         let mut in_entries_section = false;
 
         for line in stdout.lines() {
@@ -246,13 +438,14 @@ impl ArchiveBackend for SevenZipBackend {
                             uncompressed_size: cur_size,
                             compressed_size: cur_packed,
                             is_directory: cur_is_dir,
-                            is_symlink: false,
+                            is_symlink: cur_is_symlink,
                             symlink_target: None,
                         });
                     }
                     cur_size = 0;
                     cur_packed = None;
                     cur_is_dir = false;
+                    cur_is_symlink = false;
                 }
                 cur_path = Some(p);
             } else if let Some(stripped) = line.strip_prefix("Size = ") {
@@ -261,6 +454,17 @@ impl ArchiveBackend for SevenZipBackend {
                 cur_packed = stripped.trim().parse::<u64>().ok();
             } else if let Some(stripped) = line.strip_prefix("Folder = ") {
                 cur_is_dir = stripped.trim() == "+";
+            } else if let Some(stripped) = line.strip_prefix("Symbolic Link = ") {
+                cur_is_symlink = stripped.trim() == "+" || !stripped.trim().is_empty();
+            } else if let Some(stripped) = line.strip_prefix("Attributes = ") {
+                let attr = stripped.trim();
+                if attr.starts_with('l') || attr.contains('l') {
+                    cur_is_symlink = true;
+                }
+            } else if let Some(stripped) = line.strip_prefix("Characteristics = ") {
+                if stripped.contains("Symbolic Link") || stripped.contains("SymLink") {
+                    cur_is_symlink = true;
+                }
             }
         }
 
@@ -271,7 +475,7 @@ impl ArchiveBackend for SevenZipBackend {
                     uncompressed_size: cur_size,
                     compressed_size: cur_packed,
                     is_directory: cur_is_dir,
-                    is_symlink: false,
+                    is_symlink: cur_is_symlink,
                     symlink_target: None,
                 });
             }
@@ -281,79 +485,14 @@ impl ArchiveBackend for SevenZipBackend {
     }
 
     fn test(&self, path: &Path, password: Option<&str>) -> Result<ArchiveTestResult, ArchiveError> {
-        if !path.exists() {
-            return Err(ArchiveError::FileNotFound {
-                path: path.to_string_lossy().to_string(),
-            });
-        }
-
-        let format = ArchiveFormat::from_path(path).unwrap_or(ArchiveFormat::Zip);
-
-        let mut args: Vec<String> = vec![
-            "t".to_string(),
-            "-y".to_string(),
-            "-bso1".to_string(),
-            "-bse2".to_string(),
-        ];
-
-        if let Some(pwd) = password {
-            args.push(format!("-p{pwd}"));
-        } else {
-            args.push("-p".to_string());
-        }
-
-        args.push(path.to_string_lossy().to_string());
-
-        let output = self.execute_7zz(&args)?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let combined = format!("{stdout}\n{stderr}");
-
-        if combined.contains("Cannot find volume")
-            || combined.contains("Can not find volume")
-            || combined.contains("Missing volume")
-            || combined.contains("Cannot open volume")
-        {
-            return Err(ArchiveError::MissingVolume {
-                expected: "next volume".to_string(),
-                details: "Engine reported missing volume during integrity check".to_string(),
-            });
-        }
-
-        if combined.contains("Wrong password")
-            || combined.contains("Can not open encrypted archive")
-            || combined.contains("Data Error in encrypted file")
-        {
-            return if password.is_some() {
-                Err(ArchiveError::InvalidPassword {
-                    path: path.to_string_lossy().to_string(),
-                })
-            } else {
-                Err(ArchiveError::PasswordRequired {
-                    path: path.to_string_lossy().to_string(),
-                })
-            };
-        }
-
-        if !output.status.success() {
-            if combined.contains("Headers Error") || combined.contains("Data Error") {
-                return Err(ArchiveError::CorruptArchive {
-                    message: "Archive headers or data CRC check failed".to_string(),
-                });
-            }
-            return Err(ArchiveError::BackendFailure {
-                backend: "bundled-7zz".to_string(),
-                message: format!("Integrity check returned failure code: {:?}", output.status),
-            });
-        }
-
-        Ok(ArchiveTestResult {
-            path: path.to_path_buf(),
-            format,
-            passed: true,
-            entries_checked: None,
-            message: "Everything is Ok".to_string(),
-        })
+        let engine_path = resolve_bundled_engine()?;
+        let scratch = ScratchWorkspace::new().map_err(|e| ArchiveError::BackendFailure {
+            backend: "bundled-7zz".to_string(),
+            message: format!("Failed to create isolated scratch workspace: {e}"),
+        })?;
+        let policy = ProcessSandboxPolicy::new(engine_path, scratch.path().to_path_buf())
+            .with_input(path.to_path_buf());
+        self.test_with_policy(path, password, &policy)
     }
 
     fn extract(
@@ -362,88 +501,15 @@ impl ArchiveBackend for SevenZipBackend {
         destination: &Path,
         password: Option<&str>,
     ) -> Result<ArchiveExtractResult, ArchiveError> {
-        if !path.exists() {
-            return Err(ArchiveError::FileNotFound {
-                path: path.to_string_lossy().to_string(),
-            });
-        }
-
-        // Create destination directory if it does not already exist
-        std::fs::create_dir_all(destination).map_err(|e| ArchiveError::BackendFailure {
+        let engine_path = resolve_bundled_engine()?;
+        let scratch = ScratchWorkspace::new().map_err(|e| ArchiveError::BackendFailure {
             backend: "bundled-7zz".to_string(),
-            message: format!("Failed to create destination directory: {e}"),
+            message: format!("Failed to create isolated scratch workspace: {e}"),
         })?;
-
-        let format = ArchiveFormat::from_path(path).unwrap_or(ArchiveFormat::Zip);
-
-        let mut args: Vec<String> = vec![
-            "x".to_string(),
-            format!("-o{}", destination.display()),
-            "-y".to_string(),
-            "-snl-".to_string(), // Disable symbolic link extraction for security
-            "-snh-".to_string(), // Disable hard link extraction for security
-            "-bso1".to_string(),
-            "-bse2".to_string(),
-        ];
-
-        if let Some(pwd) = password {
-            args.push(format!("-p{pwd}"));
-        } else {
-            args.push("-p".to_string());
-        }
-
-        args.push(path.to_string_lossy().to_string());
-
-        let output = self.execute_7zz(&args)?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let combined = format!("{stdout}\n{stderr}");
-
-        if combined.contains("Cannot find volume")
-            || combined.contains("Can not find volume")
-            || combined.contains("Missing volume")
-            || combined.contains("Cannot open volume")
-        {
-            return Err(ArchiveError::MissingVolume {
-                expected: "next volume".to_string(),
-                details: "Engine reported missing volume during extraction".to_string(),
-            });
-        }
-
-        if combined.contains("Wrong password")
-            || combined.contains("Can not open encrypted archive")
-            || combined.contains("Data Error in encrypted file")
-        {
-            return if password.is_some() {
-                Err(ArchiveError::InvalidPassword {
-                    path: path.to_string_lossy().to_string(),
-                })
-            } else {
-                Err(ArchiveError::PasswordRequired {
-                    path: path.to_string_lossy().to_string(),
-                })
-            };
-        }
-
-        if !output.status.success() {
-            if combined.contains("Headers Error") || combined.contains("Data Error") {
-                return Err(ArchiveError::CorruptArchive {
-                    message: "Archive contains corrupted files or headers".to_string(),
-                });
-            }
-            return Err(ArchiveError::BackendFailure {
-                backend: "bundled-7zz".to_string(),
-                message: format!("Extraction failed with exit code: {:?}", output.status),
-            });
-        }
-
-        Ok(ArchiveExtractResult {
-            archive_path: path.to_path_buf(),
-            destination: destination.to_path_buf(),
-            format,
-            entries_extracted: None,
-            total_bytes_extracted: None,
-        })
+        let policy = ProcessSandboxPolicy::new(engine_path, scratch.path().to_path_buf())
+            .with_input(path.to_path_buf())
+            .with_destination(destination.to_path_buf());
+        self.extract_with_policy(path, destination, password, &policy)
     }
 }
 

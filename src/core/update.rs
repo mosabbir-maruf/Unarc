@@ -287,18 +287,25 @@ impl<T: DownloadTransport> UpdateManager<T> {
         source_override: Option<&str>,
         target_executable: Option<&Path>,
     ) -> Result<UpdateApplyResult, UnarcError> {
-        let check_res = self.check_for_update(source_override)?;
-        let manifest = check_res.manifest;
-        let (_, base_url) = self.resolve_manifest_source(source_override);
-
-        // 1. Resolve current binary path
+        // 1. Resolve and validate current binary path upfront before downloading
         let target_exe = if let Some(p) = target_executable {
             p.to_path_buf()
         } else {
             std::env::current_exe()?
         };
 
-        if !target_exe.is_file() {
+        // Verify update-path safety: reject updating through a symlinked binary path
+        let meta = std::fs::symlink_metadata(&target_exe).map_err(UnarcError::Io)?;
+        if meta.file_type().is_symlink() {
+            return Err(UnarcError::Security(SecurityError::InsecureSymlink {
+                target: format!(
+                    "Refusing to update through a symlinked binary path: '{}'. Update the real target binary directly.",
+                    target_exe.display()
+                ),
+            }));
+        }
+
+        if !meta.is_file() {
             return Err(UnarcError::Archive(ArchiveError::FileNotFound {
                 path: target_exe.display().to_string(),
             }));
@@ -309,6 +316,11 @@ impl<T: DownloadTransport> UpdateManager<T> {
                 details: "Target binary has no parent directory".to_string(),
             })
         })?;
+
+        // 2. Query release source and verify manifest
+        let check_res = self.check_for_update(source_override)?;
+        let manifest = check_res.manifest;
+        let (_, base_url) = self.resolve_manifest_source(source_override);
 
         // 2. Resolve artifact URL
         let artifact_source = if manifest.artifact_url.starts_with("http://")

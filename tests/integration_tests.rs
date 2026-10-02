@@ -2277,3 +2277,109 @@ fn test_phase6_cli_update_command() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_phase6_trust_anchor_attacker_key_rejection() {
+    let temp_dir = std::env::temp_dir().join(format!("trust_anchor_test_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    // Attacker key (different seed, attacker-controlled)
+    let attacker_seed: [u8; 32] = *b"ATTACKER_UNAUTHORIZED_KEY_SEED!!";
+    let attacker_signing_key = ed25519_dalek::SigningKey::from_bytes(&attacker_seed);
+
+    // Valid mock executable
+    let mut dummy_binary = vec![0u8; 2048];
+    #[cfg(target_os = "macos")]
+    dummy_binary[..4].copy_from_slice(&[0xCF, 0xFA, 0xED, 0xFE]);
+    #[cfg(target_os = "linux")]
+    dummy_binary[..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+
+    let artifact_path = temp_dir.join("forged_unarc");
+    std::fs::write(&artifact_path, &dummy_binary).unwrap();
+    let bin_sha = unarc::security::integrity::compute_sha256(&artifact_path).unwrap();
+
+    // Attacker signs manifest with attacker's key
+    let mut forged_manifest = unarc::security::integrity::ReleaseManifest {
+        version: "99.0.0".to_string(),
+        target_os: std::env::consts::OS.to_string(),
+        target_arch: std::env::consts::ARCH.to_string(),
+        bundled_7zz_version: PINNED_7ZIP_VERSION.to_string(),
+        bundled_7zz_sha256: unarc::security::integrity::expected_engine_binary_sha256().to_string(),
+        artifact_url: "forged_unarc".to_string(),
+        artifact_sha256: bin_sha,
+        signature: None,
+    };
+    forged_manifest.sign(&attacker_signing_key);
+
+    let manifest_path = temp_dir.join("manifest.json");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&forged_manifest).unwrap(),
+    )
+    .unwrap();
+
+    let target_bin = temp_dir.join("current_installation");
+    std::fs::write(&target_bin, b"authentic_original_binary").unwrap();
+
+    // Official manager configured exclusively with official embedded trust anchor
+    let official_verifier = unarc::security::integrity::ReleaseSignatureVerifier::official();
+    let manager = unarc::core::update::UpdateManager::new(
+        unarc::core::update::SystemCurlTransport,
+        official_verifier,
+        Some(temp_dir.to_string_lossy().to_string()),
+    );
+
+    // 1. check_for_update must reject the forged signature
+    let check_res = manager.check_for_update(None);
+    assert!(check_res.is_err());
+    let err = check_res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::SecurityPolicyViolation);
+    assert_eq!(err.exit_code(), 22);
+
+    // 2. apply_update must reject before replacement
+    let apply_res = manager.apply_update(None, Some(&target_bin));
+    assert!(apply_res.is_err());
+    let apply_err = apply_res.unwrap_err();
+    assert_eq!(apply_err.code(), ErrorCode::SecurityPolicyViolation);
+    assert_eq!(apply_err.exit_code(), 22);
+
+    // 3. Confirm existing installation remains completely unchanged
+    let current_content = std::fs::read(&target_bin).unwrap();
+    assert_eq!(current_content, b"authentic_original_binary");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_update_path_safety_symlink_rejection_and_staging() {
+    let temp_dir = std::env::temp_dir().join(format!("path_safety_test_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let real_bin = temp_dir.join("real_unarc");
+    std::fs::write(&real_bin, b"real_unarc_binary").unwrap();
+
+    let symlink_bin = temp_dir.join("symlink_to_unarc");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real_bin, &symlink_bin).unwrap();
+
+    let manager = unarc::core::update::UpdateManager::default();
+
+    // 1. Refuse to update through a symlinked binary path
+    let update_res = manager.apply_update(Some("https://invalid.test"), Some(&symlink_bin));
+    assert!(update_res.is_err());
+    let err = update_res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::UnsafeEntry);
+    assert_eq!(err.exit_code(), 21);
+
+    // 2. Confirm real binary was never touched
+    let content = std::fs::read(&real_bin).unwrap();
+    assert_eq!(content, b"real_unarc_binary");
+
+    // 3. Confirm symlink itself is intact
+    assert!(std::fs::symlink_metadata(&symlink_bin)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

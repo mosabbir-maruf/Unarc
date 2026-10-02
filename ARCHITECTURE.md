@@ -285,14 +285,15 @@ Unarc formalizes a stable taxonomy of 16 structured error codes mapped to determ
   - `--check`: Probes configured source for new versions without downloading or applying changes.
   - `--source <url|path>`: Allows specifying custom release sources (e.g. for offline airgapped updates or test fixtures).
 - **Update Verification Pipeline**:
-  1. *Query*: Fetches `manifest.json` from the source.
-  2. *Cryptographic Signature Check*: Verifies Ed25519 signature over canonical manifest bytes.
-  3. *Architecture Compatibility Check*: Asserts `target_os == CURRENT_OS` and `target_arch == CURRENT_ARCH`.
-  4. *Atomic Staging*: Downloads the release artifact into an adjacent temporary staging file (`.unarc_staging_<pid>_<timestamp>.tmp`) in the same filesystem.
-  5. *Checksum Verification*: Computes SHA-256 on the staged file; asserts exact match with `artifact_sha256`.
-  6. *Executable Format Verification*: Checks binary magic bytes: Mach-O on macOS (`0xFEEDFACF`, etc.) and ELF on Linux (`0x7F 'E' 'L' 'F'`). Never executes an unverified binary.
-  7. *Permissions*: Applies POSIX `0755` executable permissions to the staged file.
-  8. *Atomic Replacement*: Invokes POSIX `std::fs::rename`, replacing the existing executable in a single atomic filesystem operation.
+  1. *Target Executable Validation*: Upfront validation of the target binary path; immediately rejects updating through a symlink (`ErrorCode::UnsafeEntry`, exit code 21) before contacting update sources.
+  2. *Query*: Fetches `manifest.json` from the source.
+  3. *Cryptographic Signature Check*: Verifies Ed25519 signature over canonical manifest bytes against the official embedded trust anchor.
+  4. *Architecture Compatibility Check*: Asserts `target_os == CURRENT_OS` and `target_arch == CURRENT_ARCH`.
+  5. *Atomic Staging*: Downloads the release artifact into an adjacent temporary staging file (`.unarc-update-staging-<pid>-<rand>`) strictly in the target binary's parent directory, guaranteeing same-filesystem atomic `rename(2)`.
+  6. *Checksum Verification*: Computes SHA-256 on the staged file; asserts exact match with `artifact_sha256`.
+  7. *Executable Format Verification*: Checks binary magic bytes: Mach-O on macOS (`0xFEEDFACF`, etc.) and ELF on Linux (`0x7F 'E' 'L' 'F'`). Never executes an unverified binary.
+  8. *Permissions*: Applies POSIX `0755` executable permissions to the staged file prior to replacement.
+  9. *Atomic Replacement*: Invokes POSIX `std::fs::rename`, replacing the existing executable in a single atomic filesystem operation.
 - **Rollback Guarantee**:
   - Backed by RAII `StagingGuard`: any failure before the final atomic rename leaves the existing binary completely untouched and cleans up the staging file.
   - Bundled 7zz Engine Immutability: The bundled 7zz engine is never updated independently at runtime; engine updates may only arrive as part of a verified, signed new Unarc release.

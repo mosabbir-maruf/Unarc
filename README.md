@@ -79,7 +79,7 @@ unarc --json doctor
 unarc version
 ```
 
-> **Note on Password-Protected Archives**: When an archive is encrypted, Unarc prompts interactively via masked terminal input (`rpassword`) without echo. In headless/scripted environments, the `UNARC_PASSWORD` environment variable is supported.
+> **Note on Password-Protected Archives**: When an archive is encrypted, Unarc prompts interactively via masked terminal input (`rpassword`) without echo. Passwords are never accepted through environment variables or CLI flags; automated replacement secret transport is intentionally deferred.
 
 ### Interactive Mode
 
@@ -133,10 +133,10 @@ make bench
 | **Medium (10MB)** | 10.2 MB | 10.00 MB | 52 ms | 27.20 MB | 189.61 MB/s | PASS |
 | **Large (50MB)** | 51.2 MB | 50.00 MB | 65 ms | 27.44 MB | 768.26 MB/s | PASS |
 | **Multipart (10MB)** | 5.1 MB | 10.00 MB | 42 ms | 2.27 MB | 233.09 MB/s | PASS |
-| **Encrypted (5MB)** | 5.1 MB | 5.00 MB | 108 ms | 16.00 MB | 45.88 MB/s | PASS |
 
-- **Bounded Memory**: Peak RSS remains under 30MB even for large streaming extractions.
+- **Bounded Memory**: Peak RSS remains strictly bounded under 28MB across all representative streaming extractions.
 - **High Throughput**: 190–770 MB/s streaming decompression.
+- **Architectural Streaming Guarantee**: Unarc imposes no artificial file-size, archive-size, or total-output-size limits. The current benchmark suite empirically validates bounded-memory behavior on representative test payloads up to 50MB; empirical multi-gigabyte or 100GB+ extraction is not part of the current automated test run and is constrained solely by host disk storage.
 
 ---
 

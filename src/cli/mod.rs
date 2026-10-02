@@ -51,9 +51,8 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
             let res = match app.test_archive(&args.archive, None) {
                 Ok(r) => r,
                 Err(UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
-                    let password = std::env::var("UNARC_PASSWORD").unwrap_or_else(|_| {
-                        rpassword::prompt_password("Enter archive password: ").unwrap_or_default()
-                    });
+                    let password =
+                        rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
                     match app.test_archive(&args.archive, Some(&password)) {
                         Ok(r) => r,
                         Err(e) => {
@@ -74,9 +73,8 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
             let res = match app.extract_archive(&args.archive, args.output.as_deref(), None) {
                 Ok(r) => r,
                 Err(UnarcError::Archive(ArchiveError::PasswordRequired { .. })) => {
-                    let password = std::env::var("UNARC_PASSWORD").unwrap_or_else(|_| {
-                        rpassword::prompt_password("Enter archive password: ").unwrap_or_default()
-                    });
+                    let password =
+                        rpassword::prompt_password("Enter archive password: ").unwrap_or_default();
                     match app.extract_archive(
                         &args.archive,
                         args.output.as_deref(),

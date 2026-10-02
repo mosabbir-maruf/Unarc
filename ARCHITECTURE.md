@@ -111,7 +111,7 @@ Unarc preserves strict unidirectional dependencies, completely isolating present
 ### Decision 3: Production-Grade Safe Streaming Extraction
 - **Streaming Execution**:
   - Archive data is streamed directly to disk via the pinned engine; no archives or member files are buffered into memory.
-  - No artificial archive or extraction file-size limits: supports legitimate 100GB+ archives subject only to filesystem capacity.
+  - No artificial archive, file, or total-output-size limits: architectural streaming guarantees support arbitrarily large archives subject only to filesystem capacity.
 - **Multi-Stage Output Safety**:
   1. *Pre-extraction validation*: Lists member entry paths and verifies every entry against `SecurityPolicy::validate_entry_path`. Any path traversal (`../`) or absolute path (`/`) is rejected before extraction begins.
   2. *Hardened extraction flags*: Engine is invoked with `-snl-` (disable symbolic link extraction) and `-snh-` (disable hard link extraction).
@@ -237,23 +237,23 @@ Unarc formalizes a stable taxonomy of 16 structured error codes mapped to determ
 - **Distinction**:
   - Clean separation between `PASSWORD_REQUIRED` (code 16) when no password was provided and `INVALID_PASSWORD` (code 17) when the provided password fails verification.
 - **Terminal Hygiene**:
-  - Passwords are never accepted as plaintext command-line flags.
+  - Passwords are never accepted through environment variables or CLI flags.
   - Uses `rpassword::prompt_password` for terminal input without echoing to the screen.
-  - Supports headless/automated environments via `UNARC_PASSWORD` environment variable.
+  - Automated replacement secret transport is intentionally deferred to a future phase.
   - Passwords are never logged, never cached in memory longer than the operation duration, and never leaked to persistent files.
 
-### Decision 5: Bounded Resource Footprint & Benchmark Suite
-- **Streaming Extraction**:
+### Decision 5: Bounded Resource Footprint & Benchmark Scope
+- **Streaming Architectural Guarantee**:
   - Operates via streaming I/O; never loads archive files or extraction payloads into memory buffers.
-  - Verified scalability up to 100GB+ archives subject only to filesystem capacity.
-- **Performance Profiling (`scripts/benchmark.sh`)**:
+  - Architecture imposes no artificial limits on archive, file, or total output size.
+- **Representative Benchmark Suite (`scripts/benchmark.sh`)**:
   - Synthetic test suite evaluating:
     - Small archive (100 KB text)
     - Medium archive (10 MB binary)
-    - Large archive (50 MB binary)
+    - Large archive (50 MB binary streaming)
     - Multipart archive (10 MB split across 5 MB volumes)
-    - Encrypted archive (5 MB password protected)
-  - **Memory Boundedness**: Peak resident set size (RSS) remains bounded strictly under 30MB across all sizes (50MB payload consumes only 27.4 MB RSS).
+  - **Memory Boundedness**: Peak resident set size (RSS) remains bounded strictly under 28MB across all sizes (50MB payload consumes only 27.4 MB RSS).
   - **Decompression Throughput**: 190–770 MB/s streaming decompression.
+  - **Benchmark Scope Distinction**: The automated benchmark suite validates bounded-memory behavior on representative sizes (up to 50MB); empirical 100GB+ extraction is not part of the current automated test run and is bounded only by underlying disk storage.
 
 

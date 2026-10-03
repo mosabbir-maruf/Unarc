@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Pinned 7-Zip version: 26.03
 # Target architecture: aarch64 (linux-arm64) or x86_64 (linux-x64)
 RUN ARCH=$(uname -m) && \
-    mkdir -p /opt/unarc/bin && \
+    mkdir -p /opt/unarc/bin /work && \
     if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
         EXPECTED_SHA="2389ba20e4d8295e8709c20b6263b69bd1ec4972fe38a04ad7a1badbf595b996"; \
         TAR_FILE="7z2603-linux-arm64.tar.xz"; \
@@ -63,6 +63,9 @@ LABEL org.opencontainers.image.licenses="MIT"
 # Copy authentic pinned 7zz engine
 COPY --from=dev --chown=65532:65532 /opt/unarc/bin/7zz /opt/unarc/bin/7zz
 
+# Copy working directory placeholder owned by nonroot
+COPY --from=dev --chown=65532:65532 /work /work
+
 # Copy compiled unarc binary
 COPY --from=builder --chown=65532:65532 /build/target/release/unarc /usr/local/bin/unarc
 
@@ -75,7 +78,7 @@ VOLUME ["/tmp"]
 # Run strictly as non-root user (nonroot:nonroot, UID 65532)
 USER 65532:65532
 
-WORKDIR /tmp
+WORKDIR /work
 
 ENTRYPOINT ["/usr/local/bin/unarc"]
-CMD ["--help"]
+CMD []

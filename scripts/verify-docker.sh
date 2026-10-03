@@ -15,7 +15,7 @@ if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
     docker build -t "${IMAGE_NAME}" "${DIR}"
 fi
 
-echo "[1/8] Verifying Non-Root User & Image Metadata..."
+echo "[1/9] Verifying Non-Root User & Image Metadata..."
 RUNTIME_USER=$(docker inspect --format '{{.Config.User}}' "${IMAGE_NAME}")
 if [ "${RUNTIME_USER}" != "65532:65532" ] && [ "${RUNTIME_USER}" != "nonroot" ]; then
     echo "FAIL: Expected non-root user (65532:65532), got: '${RUNTIME_USER}'" >&2
@@ -23,7 +23,7 @@ if [ "${RUNTIME_USER}" != "65532:65532" ] && [ "${RUNTIME_USER}" != "nonroot" ];
 fi
 echo "  -> Runtime user is non-root: ${RUNTIME_USER}"
 
-echo "[2/8] Verifying Unarc Version in Container..."
+echo "[2/9] Verifying Unarc Version in Container..."
 VERSION_OUT=$(docker run --rm "${IMAGE_NAME}" version)
 echo "  -> Version output: ${VERSION_OUT}"
 if [[ ! "${VERSION_OUT}" =~ ^unarc\ [0-9]+\.[0-9]+\.[0-9]+ ]]; then
@@ -31,7 +31,7 @@ if [[ ! "${VERSION_OUT}" =~ ^unarc\ [0-9]+\.[0-9]+\.[0-9]+ ]]; then
     exit 1
 fi
 
-echo "[3/8] Verifying Bundled 7zz Engine Integrity & Doctor Diagnostics..."
+echo "[3/9] Verifying Bundled 7zz Engine Integrity & Doctor Diagnostics..."
 DOCTOR_OUT=$(docker run --rm "${IMAGE_NAME}" doctor)
 echo "${DOCTOR_OUT}"
 if ! echo "${DOCTOR_OUT}" | grep -q "HEALTHY"; then
@@ -54,7 +54,7 @@ if ! echo "${DOCTOR_JSON}" | grep -q '"integrity_verified": true'; then
 fi
 echo "  -> Doctor diagnostics and engine integrity PASS."
 
-echo "[4/8] Verifying Image Hermetic Cleanliness (No Dev/Build Tools)..."
+echo "[4/9] Verifying Image Hermetic Cleanliness (No Dev/Build Tools)..."
 CONTAINER_ID=$(docker create "${IMAGE_NAME}")
 EXPORT_LIST=$(docker export "${CONTAINER_ID}" | tar -tv)
 docker rm "${CONTAINER_ID}" >/dev/null
@@ -68,7 +68,7 @@ for pat in "${FORBIDDEN_PATTERNS[@]}"; do
 done
 echo "  -> Image verified hermetic: zero dev tools, compilers, or build caches present."
 
-echo "[5/8] Verifying Hardened Container Invocation (Read-Only Root, Network None, Cap Drop)..."
+echo "[5/9] Verifying Hardened Container Invocation (Read-Only Root, Network None, Cap Drop)..."
 TEST_DIR=$(mktemp -d /tmp/unarc_docker_verify_XXXXXX)
 trap 'rm -rf "${TEST_DIR}"' EXIT
 
@@ -107,7 +107,7 @@ if [ "${EXTRACTED_CONTENT}" != "hardened_docker_payload_content_12345" ]; then
 fi
 echo "  -> Archive extract under hardened runtime passed."
 
-echo "[6/8] Verifying Read-Only Input Mount Enforcement..."
+echo "[6/9] Verifying Read-Only Input Mount Enforcement..."
 # Attempting to write to /input must fail (mounted :ro)
 if docker run --rm \
   --network none \
@@ -121,7 +121,7 @@ if docker run --rm \
 fi
 echo "  -> Read-only input boundary verified."
 
-echo "[7/8] Verifying Read-Only Root Filesystem Write Denial..."
+echo "[7/9] Verifying Read-Only Root Filesystem Write Denial..."
 # Attempting to extract to root "/" or system dir must fail because root is read-only
 if docker run --rm \
   --network none \
@@ -135,7 +135,7 @@ if docker run --rm \
 fi
 echo "  -> Read-only root filesystem write denial verified."
 
-echo "[8/8] Verifying Network Isolation Enforcement..."
+echo "[8/9] Verifying Network Isolation Enforcement..."
 # Verify engine cannot communicate over network (container has --network none)
 NET_CID=$(docker create --network none "${IMAGE_NAME}")
 NET_STATUS=$(docker inspect --format '{{.HostConfig.NetworkMode}}' "${NET_CID}")
@@ -146,6 +146,21 @@ if [ "${NET_STATUS}" != "none" ]; then
 fi
 echo "  -> Network mode confirmed as none."
 
+echo "[9/9] Verifying Default No-Argument Interactive Startup..."
+INTERACTIVE_OUTPUT=$(printf '/exit\n' | docker run -i --rm -v "${TEST_DIR}:/work" "${IMAGE_NAME}" 2>&1)
+EXIT_CODE=$?
+if [ ${EXIT_CODE} -ne 0 ]; then
+    echo "FAIL: Container startup without arguments exited with code ${EXIT_CODE}" >&2
+    echo "Output was: ${INTERACTIVE_OUTPUT}" >&2
+    exit 1
+fi
+if ! echo "${INTERACTIVE_OUTPUT}" | grep -q "Secure Archive Utility"; then
+    echo "FAIL: Interactive banner not found in startup output" >&2
+    echo "Output was: ${INTERACTIVE_OUTPUT}" >&2
+    exit 1
+fi
+echo "  -> Default no-argument interactive CLI startup verified cleanly."
+
 echo "=========================================================="
-echo "ALL 8 HARDENED DOCKER RUNTIME VERIFICATION CHECKS PASSED!"
+echo "ALL 9 HARDENED DOCKER RUNTIME VERIFICATION CHECKS PASSED!"
 echo "=========================================================="

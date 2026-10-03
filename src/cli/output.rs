@@ -54,7 +54,8 @@ impl OutputFormatter {
     }
 
     /// Helper for conditional ANSI color styling.
-    fn style<'a>(&self, text: &'a str, ansi_code: &'a str) -> std::borrow::Cow<'a, str> {
+    #[must_use]
+    pub fn style<'a>(&self, text: &'a str, ansi_code: &'a str) -> std::borrow::Cow<'a, str> {
         if self.color_enabled {
             std::borrow::Cow::Owned(format!("{ansi_code}{text}\x1b[0m"))
         } else {
@@ -90,7 +91,12 @@ impl OutputFormatter {
             };
             println!("Archive Test: {} [{}]", result.path.display(), status_badge);
             println!("  Format:   {}", result.format);
-            println!("  Status:   {}", result.message);
+            let display_message = if result.passed && result.message == "Everything is Ok" {
+                "Integrity verified (all checksums match)"
+            } else {
+                &result.message
+            };
+            println!("  Status:   {display_message}");
             if let Some(count) = result.entries_checked {
                 println!("  Entries:  {count}");
             }
@@ -117,7 +123,7 @@ impl OutputFormatter {
                 println!("  Entries:     {entries}");
             }
             if let Some(bytes) = result.total_bytes_extracted {
-                println!("  Extracted:   {bytes} bytes");
+                println!("  Extracted:   {}", format_byte_size(bytes));
             }
         }
     }
@@ -191,6 +197,18 @@ impl OutputFormatter {
             );
             println!("  Pinned Engine:  v{}", report.engine.pinned_version);
             println!("  Diagnostic Probes:");
+
+            use std::io::IsTerminal;
+            let wrap_width = if std::io::stdout().is_terminal() {
+                crossterm::terminal::size()
+                    .map(|(w, _)| w as usize)
+                    .unwrap_or(80)
+            } else {
+                usize::MAX
+            };
+            let prefix_len = 42usize;
+            let msg_max_width = wrap_width.saturating_sub(prefix_len).max(20);
+
             for check in &report.checks {
                 let badge = if !check.passed {
                     self.style("FAIL", "\x1b[1;31m")
@@ -199,7 +217,16 @@ impl OutputFormatter {
                 } else {
                     self.style("PASS", "\x1b[1;32m")
                 };
-                println!("    [{badge}] {:<30} {}", check.name, check.message);
+
+                let lines = wrap_message(&check.message, msg_max_width);
+                if lines.len() <= 1 {
+                    println!("    [{badge}] {:<30} {}", check.name, check.message);
+                } else {
+                    println!("    [{badge}] {:<30} {}", check.name, lines[0]);
+                    for line in &lines[1..] {
+                        println!("{:prefix_len$}{line}", "");
+                    }
+                }
             }
         }
     }
@@ -323,6 +350,75 @@ impl OutputFormatter {
     }
 }
 
+/// Formats an integer with standard thousands comma separators (e.g. 104,857,600).
+fn format_integer_with_commas(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    let rem = s.len() % 3;
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (i == rem || (i > rem && (i - rem) % 3 == 0)) {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result
+}
+
+/// Formats a byte quantity into a human-readable binary size with raw bytes in parentheses.
+///
+/// Example:
+/// - `38` -> `"38 bytes"`
+/// - `104857600` -> `"100.0 MB (104,857,600 bytes)"`
+#[must_use]
+pub fn format_byte_size(bytes: u64) -> String {
+    let formatted_bytes = format_integer_with_commas(bytes);
+    if bytes < 1024 {
+        if bytes == 1 {
+            "1 byte".to_string()
+        } else {
+            format!("{bytes} bytes")
+        }
+    } else if bytes < 1024 * 1024 {
+        let kb = bytes as f64 / 1024.0;
+        format!("{kb:.1} KB ({formatted_bytes} bytes)")
+    } else if bytes < 1024 * 1024 * 1024 {
+        let mb = bytes as f64 / (1024.0 * 1024.0);
+        format!("{mb:.1} MB ({formatted_bytes} bytes)")
+    } else {
+        let gb = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        format!("{gb:.2} GB ({formatted_bytes} bytes)")
+    }
+}
+
+/// Wraps a message text at word boundaries to fit within `max_width`.
+pub fn wrap_message(text: &str, max_width: usize) -> Vec<&str> {
+    if text.len() <= max_width {
+        return vec![text];
+    }
+    let mut lines = Vec::new();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        if remaining.len() <= max_width {
+            lines.push(remaining);
+            break;
+        }
+        let slice = &remaining[..max_width];
+        let break_idx = match slice.rfind(' ') {
+            Some(idx) if idx > 0 => idx,
+            _ => match remaining.find(' ') {
+                Some(idx) => idx,
+                None => {
+                    lines.push(remaining);
+                    break;
+                }
+            },
+        };
+        lines.push(remaining[..break_idx].trim());
+        remaining = remaining[break_idx..].trim_start();
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +428,32 @@ mod tests {
         let fmt = OutputFormatter::new(true, false, false);
         assert!(fmt.json_mode);
         assert!(!fmt.quiet);
+    }
+
+    #[test]
+    fn test_format_byte_size() {
+        assert_eq!(format_byte_size(0), "0 bytes");
+        assert_eq!(format_byte_size(1), "1 byte");
+        assert_eq!(format_byte_size(38), "38 bytes");
+        assert_eq!(format_byte_size(1023), "1023 bytes");
+        assert_eq!(format_byte_size(1024), "1.0 KB (1,024 bytes)");
+        assert_eq!(format_byte_size(104857600), "100.0 MB (104,857,600 bytes)");
+        assert_eq!(
+            format_byte_size(1073741824),
+            "1.00 GB (1,073,741,824 bytes)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_message() {
+        let short = "Short message";
+        assert_eq!(wrap_message(short, 20), vec!["Short message"]);
+
+        let long = "This is a long message that needs wrapping across multiple terminal lines";
+        let wrapped = wrap_message(long, 25);
+        assert!(wrapped.len() >= 3);
+        for line in &wrapped {
+            assert!(line.len() <= 28);
+        }
     }
 }

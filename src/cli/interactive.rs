@@ -4,7 +4,7 @@ use crate::core::Application;
 use crate::error::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use std::io::{stdin, stdout, BufRead, IsTerminal, Write};
+use std::io::{stdin, stdout, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 /// Clean ASCII wordmark with subtitle.
@@ -101,23 +101,20 @@ pub fn run_interactive(
 
 /// Non-TTY line-based loop.
 fn run_non_tty(app: &Application, formatter: &crate::cli::output::OutputFormatter) -> Result<()> {
-    let input = stdin();
-    let reader = input.lock();
-
-    for line in reader.lines() {
-        let text = match line {
-            Ok(t) => t,
-            Err(_) => break,
-        };
-        let trimmed = text.trim();
+    let mut line = String::new();
+    while stdin().read_line(&mut line)? > 0 {
+        let trimmed = line.trim();
         if trimmed.is_empty() {
+            line.clear();
             continue;
         }
         if trimmed == "/exit" || trimmed == "exit" || trimmed == "quit" {
             break;
         }
 
-        execute_interactive_command(app, formatter, trimmed)?;
+        let cmd = trimmed.to_string();
+        line.clear();
+        execute_interactive_command(app, formatter, &cmd)?;
     }
 
     Ok(())
@@ -129,6 +126,15 @@ struct RawModeGuard;
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
+    }
+}
+
+/// Returns the styled interactive prompt prefix.
+fn prompt_prefix() -> &'static str {
+    if std::env::var_os("NO_COLOR").is_some() {
+        "unarc › "
+    } else {
+        "unarc \x1b[1;36m›\x1b[0m "
     }
 }
 
@@ -156,7 +162,7 @@ fn run_terminal_loop(
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d'))
                 {
-                    print!("\r\x1b[2Kunarc> \x1b[J\r\nExiting.\r\n");
+                    print!("\r\x1b[2K{}\x1b[J\r\nExiting.\r\n", prompt_prefix());
                     let _ = stdout().flush();
                     break;
                 }
@@ -202,7 +208,7 @@ fn run_terminal_loop(
                         };
 
                         // Clear suggestions below the prompt and move to a clean line
-                        print!("\r\x1b[2Kunarc> {cmd_to_run}\x1b[J\r\n");
+                        print!("\r\x1b[2K{}{cmd_to_run}\x1b[J\r\n", prompt_prefix());
                         let _ = stdout().flush();
 
                         // Temporarily disable raw mode to run commands cleanly
@@ -219,6 +225,8 @@ fn run_terminal_loop(
                                 formatter.print_error(&e);
                                 crate::platform::signals::reset_interrupted();
                             }
+                            // Add exactly one blank line between completed command output and next prompt
+                            println!();
                         }
 
                         // Re-enable raw mode and reset buffer
@@ -244,27 +252,48 @@ fn run_terminal_loop(
 /// Renders the prompt and active suggestions inline.
 fn print_prompt(buffer: &str, selected_index: usize) {
     let mut out = stdout();
+    let prompt = prompt_prefix();
     // Clear line, print prompt, and clear everything below from cursor to screen end
-    print!("\r\x1b[2Kunarc> {buffer}\x1b[J");
+    print!("\r\x1b[2K{prompt}{buffer}\x1b[J");
     let _ = out.flush();
 
     if buffer.starts_with('/') {
         let filtered = filter_suggestions(buffer);
         if !filtered.is_empty() {
+            let color = std::env::var_os("NO_COLOR").is_none();
             println!("\r");
             for (i, item) in filtered.iter().enumerate() {
                 if i == selected_index {
+                    if color {
+                        print!(
+                            "\x1b[2K  \x1b[1;36m›\x1b[0m \x1b[1;36m{:<10}\x1b[0m \x1b[90m{}\x1b[0m\r\n",
+                            item.command, item.description
+                        );
+                    } else {
+                        print!("\x1b[2K  › {:<10} {}\r\n", item.command, item.description);
+                    }
+                } else if color {
                     print!(
-                        "\x1b[2K  > \x1b[1;36m{:<10}\x1b[0m - {}\r\n",
+                        "\x1b[2K    \x1b[1m{:<10}\x1b[0m \x1b[90m{}\x1b[0m\r\n",
                         item.command, item.description
                     );
                 } else {
-                    print!("\x1b[2K    {:<10} - {}\r\n", item.command, item.description);
+                    print!("\x1b[2K    {:<10} {}\r\n", item.command, item.description);
                 }
             }
-            // Move cursor back up to prompt line
-            let count = filtered.len() + 1;
-            print!("\x1b[{count}A\r\x1b[2Kunarc> {buffer}");
+
+            // Divider and navigation hints
+            if color {
+                print!("\x1b[2K\x1b[90m  ────────────────────────────────────────────────────────────\x1b[0m\r\n");
+                print!("\x1b[2K\x1b[90m  ↑/↓ navigate • Tab complete • Enter run • Esc cancel\x1b[0m\r\n");
+            } else {
+                print!("\x1b[2K  ------------------------------------------------------------\r\n");
+                print!("\x1b[2K  ↑/↓ navigate • Tab complete • Enter run • Esc cancel\r\n");
+            }
+
+            // Move cursor back up to prompt line (items + divider + hint row + newline = filtered.len() + 3)
+            let count = filtered.len() + 3;
+            print!("\x1b[{count}A\r\x1b[2K{prompt}{buffer}");
             let _ = out.flush();
         }
     }
@@ -374,6 +403,12 @@ fn prompt_and_run_test(
     let mut line = String::new();
     stdin().read_line(&mut line)?;
     let clean = clean_terminal_path(&line);
+    if clean.is_empty() {
+        if !formatter.is_quiet() {
+            println!("{}", formatter.style("Operation cancelled.", "\x1b[90m"));
+        }
+        return Ok(());
+    }
     let archive_path = PathBuf::from(clean);
 
     let show_progress = formatter.should_show_progress();
@@ -400,6 +435,12 @@ fn prompt_and_run_extract(
     let mut archive_line = String::new();
     stdin().read_line(&mut archive_line)?;
     let clean_archive = clean_terminal_path(&archive_line);
+    if clean_archive.is_empty() {
+        if !formatter.is_quiet() {
+            println!("{}", formatter.style("Operation cancelled.", "\x1b[90m"));
+        }
+        return Ok(());
+    }
     let archive_path = PathBuf::from(clean_archive);
 
     print!("Enter destination directory (leave empty for default): ");
@@ -469,5 +510,12 @@ mod tests {
         let doctor_cmd = filter_suggestions("/d");
         assert_eq!(doctor_cmd.len(), 1);
         assert_eq!(doctor_cmd[0].command, "/doctor");
+    }
+
+    #[test]
+    fn test_prompt_prefix() {
+        let p = prompt_prefix();
+        assert!(p.starts_with("unarc "));
+        assert!(p.contains('›'));
     }
 }

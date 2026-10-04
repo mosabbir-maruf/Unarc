@@ -20,6 +20,9 @@ signal-hook = { version = "0.3", features = ["iterator"] }
 sha2 = "0.10"
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std"] }
 
+[build-dependencies]
+sha2 = "0.10"
+
 [lib]
 name = "unarc"
 path = "src/lib.rs"

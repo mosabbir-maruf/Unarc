@@ -45,7 +45,7 @@ CMD ["cargo", "test"]
 FROM dev AS builder
 
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY tests ./tests
 RUN cargo build --release

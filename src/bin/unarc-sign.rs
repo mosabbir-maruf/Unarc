@@ -210,10 +210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Saved signed manifest to: {}", out_manifest.display());
 
     // 8. Write accompanying .sha256 checksum file
-    let sha_file = artifact.with_extension(format!(
-        "{}.sha256",
-        artifact.extension().and_then(|e| e.to_str()).unwrap_or("")
-    ));
+    let sha_file = PathBuf::from(format!("{}.sha256", artifact.display()));
     fs::write(&sha_file, format!("{artifact_sha256}  {filename}\n"))?;
     println!("Saved SHA-256 checksum to: {}", sha_file.display());
 

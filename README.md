@@ -12,21 +12,23 @@ Choose the path that fits your needs:
 
 | Audience | Use Case | Distribution Path | Toolchain Required |
 |---|---|---|---|
-| **Native End User** *(Recommended)* | "I just want to use Unarc on my computer" | [**GitHub Releases**](#native-installation-recommended) | **None** (Self-contained prebuilt bundle) |
+| **Native End User** *(Recommended)* | "I just want to use Unarc on my computer" | [**GitHub Releases**](#native-installation-recommended) | **None** (Single self-contained executable) |
 | **Docker User** | "I want to use Docker without installing native binaries" | [**GHCR Container Image**](#docker-ghcr) | **Docker only** (Copy/paste canonical command) |
 | **Developer / Contributor** | "I want to build from source or contribute code" | [**Source Repository**](#developer--build-from-source) | **Rust & Cargo** (`git clone` + `cargo run`) |
 
 ---
 
 ### Path 1: Native End User (Recommended)
-Download the prebuilt, self-contained release package for your system from [GitHub Releases](https://github.com/mosabbir-maruf/Unarc/releases/latest). Release bundles contain the compiled `unarc` binary and bundled pinned `7zz` engine—no Rust, Cargo, 7-Zip, Homebrew, or build tools are required.
+Download the standalone, self-contained `unarc` executable for your system from [GitHub Releases](https://github.com/mosabbir-maruf/Unarc/releases/latest). Unarc natively embeds the authentic pinned `7zz v26.03` engine—no Rust, Cargo, 7-Zip, Homebrew, Docker, or runtime dependencies are required.
 
-After downloading and extracting:
+After downloading:
 ```bash
-# Run immediately from the extracted folder:
+# Make executable and run immediately:
+chmod +x unarc
 ./unarc
 
-# Or move both unarc and 7zz to your PATH (e.g., ~/.local/bin) to run anywhere:
+# Or move to your PATH (e.g., ~/.local/bin) to run anywhere:
+mv unarc ~/.local/bin/
 unarc
 ```
 
@@ -49,16 +51,15 @@ cargo run --release
 
 ## Native Installation (Recommended)
 
-Unarc provides self-contained, prebuilt native release packages for supported operating systems.
+Unarc is distributed as a **single, self-contained native executable** for supported operating systems.
 **Zero runtime dependencies**: Normal users do not need Rust, Cargo, 7zz, Homebrew, Python, or Docker.
 
-Each release bundle contains:
-- `unarc`: The security-hardened CLI binary.
-- `7zz`: The authentic, pinned 7-Zip engine binary (`v26.03`).
-- Documentation and license files (`README.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`).
-
-> [!IMPORTANT]
-> Unarc resolves the bundled `7zz` engine adjacent to its own executable (never querying system `PATH` or downloading binaries at runtime). Always keep `unarc` and `7zz` together in the same directory.
+### True Single-File Architecture
+- **Embedded Archive Engine**: The authentic, pinned 7-Zip engine binary (`v26.03`) is embedded directly into the `unarc` executable at compile time.
+- **On-Demand Materialization**: When an archive operation begins, Unarc securely materializes the embedded engine into a private, restricted temporary directory (`0700` directory mode, `0500` read/execute non-writable binary).
+- **Cryptographic Verification**: The engine is verified against its pinned official SHA-256 hash both at compile time and before execution at runtime.
+- **Automatic Cleanup**: Temporary materialized engine directories are automatically purged upon process termination and safely swept on startup.
+- **Air-Gapped Operation**: Unarc never queries system `PATH`, never invokes Homebrew, and never downloads binaries from the internet at runtime.
 
 ### Supported Platforms
 - **macOS Apple Silicon**: `macos-arm64` (`aarch64-apple-darwin`)
@@ -67,26 +68,28 @@ Each release bundle contains:
 
 ### Quick Download & Run (Manual)
 1. Go to [GitHub Releases (Latest)](https://github.com/mosabbir-maruf/Unarc/releases/latest).
-2. Download the archive for your operating system:
-   - `unarc-0.2.0-macos-arm64.tar.gz` (macOS Apple Silicon)
-   - `unarc-0.2.0-linux-x86_64.tar.gz` (Linux 64-bit Intel/AMD)
-   - `unarc-0.2.0-linux-aarch64.tar.gz` (Linux 64-bit ARM)
-3. Extract the tarball:
+2. Download the standalone executable for your operating system:
+   - `unarc-0.2.0-macos-arm64` (macOS Apple Silicon)
+   - `unarc-0.2.0-linux-x86_64` (Linux 64-bit Intel/AMD)
+   - `unarc-0.2.0-linux-aarch64` (Linux 64-bit ARM)
+3. Make it executable and run:
    ```bash
-   tar -xzf unarc-0.2.0-macos-arm64.tar.gz
-   cd unarc-0.2.0-macos-arm64
-   ./unarc
+   chmod +x unarc-0.2.0-macos-arm64
+   ./unarc-0.2.0-macos-arm64
    ```
-4. *(Optional)* To run `unarc` from any terminal directory, move both files to a directory in your `PATH` (such as `~/.local/bin`):
+4. *(Optional)* Move it to your `PATH` (such as `~/.local/bin/unarc`) to run from any terminal:
    ```bash
    mkdir -p ~/.local/bin
-   cp unarc 7zz ~/.local/bin/
-   chmod 0755 ~/.local/bin/unarc ~/.local/bin/7zz
+   mv unarc-0.2.0-macos-arm64 ~/.local/bin/unarc
+   chmod 0755 ~/.local/bin/unarc
+   unarc
    ```
+
+*(Note: `.tar.gz` bundles containing documentation and licenses are also provided alongside for package maintainers.)*
 
 ### Scripted Installation (Terminal)
 
-You can also download and verify the release package directly from your shell:
+You can download and verify the standalone executable directly from your shell:
 
 ```bash
 # 1. Set target platform (options: macos-arm64, linux-x86_64, linux-aarch64)
@@ -95,27 +98,23 @@ PLATFORM="macos-arm64"
 # 2. Check the latest release tag at https://github.com/mosabbir-maruf/Unarc/releases/latest
 VERSION="0.2.0"
 
-# 3. Download the release tarball and SHA-256 checksum
-curl -sSLO "https://github.com/mosabbir-maruf/Unarc/releases/download/v${VERSION}/unarc-${VERSION}-${PLATFORM}.tar.gz"
-curl -sSLO "https://github.com/mosabbir-maruf/Unarc/releases/download/v${VERSION}/unarc-${VERSION}-${PLATFORM}.tar.gz.sha256"
+# 3. Download the standalone executable and SHA-256 checksum
+curl -sSLO "https://github.com/mosabbir-maruf/Unarc/releases/download/v${VERSION}/unarc-${VERSION}-${PLATFORM}"
+curl -sSLO "https://github.com/mosabbir-maruf/Unarc/releases/download/v${VERSION}/unarc-${VERSION}-${PLATFORM}.sha256"
 
 # 4. Verify checksum
 # macOS:
-shasum -a 256 -c "unarc-${VERSION}-${PLATFORM}.tar.gz.sha256"
+shasum -a 256 -c "unarc-${VERSION}-${PLATFORM}.sha256"
 # Linux:
-# sha256sum -c "unarc-${VERSION}-${PLATFORM}.tar.gz.sha256"
+# sha256sum -c "unarc-${VERSION}-${PLATFORM}.sha256"
 
-# 5. Extract archive bundle
-tar -xzf "unarc-${VERSION}-${PLATFORM}.tar.gz"
-
-# 6. Move unarc and 7zz together into your PATH
+# 5. Install executable into PATH
 mkdir -p ~/.local/bin
-mv "unarc-${VERSION}-${PLATFORM}/unarc" ~/.local/bin/
-mv "unarc-${VERSION}-${PLATFORM}/7zz" ~/.local/bin/
-chmod 0755 ~/.local/bin/unarc ~/.local/bin/7zz
-rm -rf "unarc-${VERSION}-${PLATFORM}" "unarc-${VERSION}-${PLATFORM}.tar.gz"*
+mv "unarc-${VERSION}-${PLATFORM}" ~/.local/bin/unarc
+chmod 0755 ~/.local/bin/unarc
+rm -f "unarc-${VERSION}-${PLATFORM}.sha256"
 
-# 7. Verify installation
+# 6. Verify installation
 unarc version
 unarc doctor
 ```
@@ -391,7 +390,7 @@ CID=$(docker create zricethezav/gitleaks:latest detect --source /repo --verbose 
 ### 1. macOS Gatekeeper / Quarantine Alert
 If macOS blocks execution of downloaded binaries with an alert stating the developer cannot be verified:
 ```bash
-xattr -d com.apple.quarantine ~/.local/bin/unarc ~/.local/bin/7zz
+xattr -d com.apple.quarantine ~/.local/bin/unarc
 ```
 
 ### 2. Docker Volume Permissions
@@ -404,8 +403,12 @@ If extracting an encrypted archive in automated scripts or non-TTY environments,
 ### 4. Missing or Corrupt Multipart Archive Volume
 When extracting multipart archive sets (`.part1.rar` or `.r00`), ensure all constituent volume files are present in the same directory as the initial volume. Missing volumes trigger exit code `13` (`MISSING_VOLUME`); corrupt volumes trigger exit code `14` (`INVALID_VOLUME`).
 
-### 5. Bundled Engine Resolution
-`unarc` locates `7zz` adjacent to its executable. If moving `unarc` to a new path, copy `7zz` alongside it or set `export UNARC_BUNDLED_7ZZ=/path/to/7zz`.
+### 5. Engine Resolution Priority
+Unarc resolves its archive engine in strict priority:
+1. `UNARC_BUNDLED_7ZZ` environment variable (if explicitly set for custom/testing setups).
+2. An adjacent `7zz` executable located in the same directory (for backwards compatibility / dev setups).
+3. Hardcoded container path `/opt/unarc/bin/7zz` (in Docker distroless runtime).
+4. **Embedded Authentic Engine**: Unarc automatically materializes its embedded pinned 7zz engine into a private restricted temporary directory. No external engine files are required.
 
 ---
 
@@ -414,9 +417,11 @@ When extracting multipart archive sets (`.part1.rar` or `.r00`), ensure all cons
 Official Unarc releases include cryptographic integrity verification:
 
 - **Release Artifacts**:
-  - `unarc-<version>-<platform>.tar.gz`: Release bundle.
-  - `unarc-<version>-<platform>.tar.gz.sha256`: SHA-256 digest file.
-  - `unarc-<version>-<platform>.manifest.json`: Cryptographically signed JSON manifest containing artifact metadata and payload SHA-256.
+  - `unarc-<version>-<platform>`: Standalone self-contained native executable.
+  - `unarc-<version>-<platform>.sha256`: SHA-256 digest file for the standalone executable.
+  - `unarc-<version>-<platform>.manifest.json`: Cryptographically signed JSON release manifest.
+  - `unarc-<version>-<platform>.tar.gz`: Full archive bundle (including documentation and licenses).
+  - `unarc-<version>-<platform>.tar.gz.sha256`: SHA-256 digest file for the archive bundle.
 - **Official Public Key (Ed25519 hex)**:
   `90cd97dbf43425cb694d386cb89f2e04fa252fafa6bffddddfc2f3fc962a94ee`
 - **Native Self-Update**:

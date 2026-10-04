@@ -15,6 +15,18 @@ if [ ! -f /tmp/macos_usr_lib_tbd.tar.gz ]; then
     fi
 fi
 
+# Ensure pinned macOS 7zz binary is available to embed
+SEVENZZ_HOST="${DIR}/target/aarch64-apple-darwin/release/7zz"
+if [ ! -f "${SEVENZZ_HOST}" ]; then
+    mkdir -p "${DIR}/target/aarch64-apple-darwin/release"
+    EXPECTED_SHA="5ca87677072c59f5602e5c49baa27d4694bacd2259b4e507f0094249d4281480"
+    curl -sSL "https://github.com/ip7z/7zip/releases/download/26.03/7z2603-mac.tar.xz" -o /tmp/7z-mac.tar.xz
+    echo "${EXPECTED_SHA}  /tmp/7z-mac.tar.xz" | shasum -a 256 -c -
+    tar -xJf /tmp/7z-mac.tar.xz -C "${DIR}/target/aarch64-apple-darwin/release" 7zz
+    chmod 0755 "${SEVENZZ_HOST}"
+    rm -f /tmp/7z-mac.tar.xz
+fi
+
 CONTAINER_ID="$(docker create -v unarc-cargo-registry:/usr/local/cargo/registry -v unarc-cargo-git:/usr/local/cargo/git -w /workspace unarc-dev bash -c '
 set -e
 if [ ! -f /opt/zig/zig ]; then
@@ -29,12 +41,16 @@ cat << "EOF" > /usr/local/bin/zig-darwin-linker
 exec /opt/zig/zig cc -target aarch64-macos -L /opt/macos-sdk/usr/lib "$@"
 EOF
 chmod +x /usr/local/bin/zig-darwin-linker
-RUSTFLAGS="-C linker=zig-darwin-linker" cargo build --target aarch64-apple-darwin --release
+RUSTFLAGS="-C linker=zig-darwin-linker" UNARC_EMBED_7ZZ_PATH=/tmp/7zz cargo build --target aarch64-apple-darwin --release
 ')"
 
 docker cp /tmp/macos_usr_lib_tbd.tar.gz "${CONTAINER_ID}:/tmp/"
+docker cp "${SEVENZZ_HOST}" "${CONTAINER_ID}:/tmp/7zz"
 docker cp "${DIR}/Cargo.toml" "${CONTAINER_ID}:/workspace/"
 docker cp "${DIR}/Cargo.lock" "${CONTAINER_ID}:/workspace/"
+if [ -f "${DIR}/build.rs" ]; then
+    docker cp "${DIR}/build.rs" "${CONTAINER_ID}:/workspace/"
+fi
 docker cp "${DIR}/src" "${CONTAINER_ID}:/workspace/"
 docker cp "${DIR}/tests" "${CONTAINER_ID}:/workspace/"
 

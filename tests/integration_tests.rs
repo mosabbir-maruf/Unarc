@@ -2375,3 +2375,94 @@ fn test_phase6_update_path_safety_symlink_rejection_and_staging() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_phase8_embedded_engine_availability_and_hash() {
+    if unarc::archive::bundled::has_embedded_engine() {
+        let verify_res = unarc::archive::bundled::verify_embedded_engine_integrity();
+        assert!(
+            verify_res.is_ok(),
+            "Expected embedded engine hash verification to pass: {verify_res:?}"
+        );
+
+        let bytes = unarc::archive::bundled::embedded_engine_bytes();
+        assert!(!bytes.is_empty());
+        let computed = unarc::security::integrity::compute_sha256_bytes(bytes);
+        let expected = unarc::security::integrity::expected_engine_binary_sha256();
+        assert_eq!(computed.to_lowercase(), expected.to_lowercase());
+    }
+}
+
+#[test]
+fn test_phase8_tampered_payload_rejection() {
+    let tampered = b"malicious or corrupted 7zz payload";
+    let res = unarc::archive::bundled::verify_engine_bytes_integrity(tampered);
+    assert!(res.is_err());
+    assert!(matches!(
+        res,
+        Err(unarc::error::SecurityError::PolicyViolation { .. })
+    ));
+
+    let empty = b"";
+    let empty_res = unarc::archive::bundled::verify_engine_bytes_integrity(empty);
+    assert!(empty_res.is_err());
+}
+
+#[test]
+fn test_phase8_secure_materialization_permissions_and_cleanup() {
+    if !unarc::archive::bundled::has_embedded_engine() {
+        return;
+    }
+
+    // Materialize
+    let path = unarc::archive::bundled::get_or_materialize_embedded_engine()
+        .expect("Materialization should succeed when embedded payload is present");
+    assert!(path.is_file());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = path.parent().unwrap();
+        let dir_meta = std::fs::metadata(parent).unwrap();
+        let dir_mode = dir_meta.permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "Engine directory must be strictly 0700");
+
+        let file_meta = std::fs::metadata(&path).unwrap();
+        let file_mode = file_meta.permissions().mode() & 0o777;
+        assert_eq!(file_mode, 0o500, "Engine binary must be non-writable 0500");
+    }
+
+    // Verify it executes
+    let output = std::process::Command::new(&path).arg("i").output().unwrap();
+    assert!(output.status.success());
+    let out_str = String::from_utf8_lossy(&output.stdout);
+    assert!(out_str.contains("7-Zip"));
+
+    // Cleanup
+    unarc::archive::bundled::clean_materialized_engine();
+    assert!(
+        !path.exists(),
+        "Engine binary must be removed after cleanup"
+    );
+    if let Some(parent) = path.parent() {
+        assert!(
+            !parent.exists(),
+            "Engine directory must be removed after cleanup"
+        );
+    }
+}
+
+#[test]
+fn test_phase8_external_resolution_precedence() {
+    let temp_dir = std::env::temp_dir().join(format!("external_prec_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let fake_7zz = temp_dir.join("7zz");
+    std::fs::write(&fake_7zz, b"fake_external_binary").unwrap();
+
+    std::env::set_var("UNARC_BUNDLED_7ZZ", fake_7zz.to_string_lossy().as_ref());
+    let resolved = unarc::archive::bundled::resolve_bundled_engine().unwrap();
+    assert_eq!(resolved, fake_7zz);
+
+    std::env::remove_var("UNARC_BUNDLED_7ZZ");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

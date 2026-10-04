@@ -33,6 +33,9 @@ run_cargo() {
         if [ -f "${DIR}/Cargo.lock" ]; then
             docker cp "${DIR}/Cargo.lock" "${CONTAINER_ID}:/workspace/"
         fi
+        if [ -f "${DIR}/build.rs" ]; then
+            docker cp "${DIR}/build.rs" "${CONTAINER_ID}:/workspace/"
+        fi
         docker cp "${DIR}/src" "${CONTAINER_ID}:/workspace/"
         if [ -d "${DIR}/tests" ]; then
             docker cp "${DIR}/tests" "${CONTAINER_ID}:/workspace/"
@@ -54,6 +57,9 @@ run_cargo() {
             docker cp "${CONTAINER_ID}:/workspace/src/." "${DIR}/src/" >/dev/null 2>&1 || true
             if [ -d "${DIR}/tests" ]; then
                 docker cp "${CONTAINER_ID}:/workspace/tests/." "${DIR}/tests/" >/dev/null 2>&1 || true
+            fi
+            if [ -f "${DIR}/build.rs" ]; then
+                docker cp "${CONTAINER_ID}:/workspace/build.rs" "${DIR}/" >/dev/null 2>&1 || true
             fi
         fi
 

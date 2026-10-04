@@ -39,7 +39,223 @@ static SUPPORTED_FORMATS: &[ArchiveFormat] = &[
     ArchiveFormat::Rar5,
 ];
 
+/// Embedded pinned 7zz engine binary payload for the target platform.
+pub const EMBEDDED_7ZZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_7zz.bin"));
+
+static MATERIALIZED_ENGINE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+#[cfg(unix)]
+static ATEXIT_REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn atexit_cleanup() {
+    clean_materialized_engine();
+}
+
+/// Checks whether an embedded 7zz engine payload is compiled into the binary.
+#[must_use]
+#[allow(clippy::const_is_empty)]
+pub fn has_embedded_engine() -> bool {
+    !EMBEDDED_7ZZ.is_empty()
+}
+
+/// Returns the embedded 7zz engine payload bytes.
+#[must_use]
+pub fn embedded_engine_bytes() -> &'static [u8] {
+    EMBEDDED_7ZZ
+}
+
+/// Verifies that an arbitrary engine payload byte slice matches the expected pinned SHA-256 hash.
+pub fn verify_engine_bytes_integrity(data: &[u8]) -> Result<(), crate::error::SecurityError> {
+    if data.is_empty() {
+        return Err(crate::error::SecurityError::PolicyViolation {
+            reason: "Engine binary payload is empty".to_string(),
+        });
+    }
+
+    let computed = crate::security::integrity::compute_sha256_bytes(data);
+    let expected = crate::security::integrity::expected_engine_binary_sha256();
+
+    if !computed.eq_ignore_ascii_case(expected) {
+        return Err(crate::error::SecurityError::PolicyViolation {
+            reason: format!(
+                "Engine binary payload hash mismatch: computed {computed}, expected {expected}"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Verifies that the compiled embedded 7zz engine payload matches the official pinned SHA-256 hash.
+pub fn verify_embedded_engine_integrity() -> Result<(), crate::error::SecurityError> {
+    if !has_embedded_engine() {
+        return Err(crate::error::SecurityError::PolicyViolation {
+            reason: "Embedded 7zz engine payload is not compiled into this binary".to_string(),
+        });
+    }
+    verify_engine_bytes_integrity(EMBEDDED_7ZZ)
+}
+
+/// Cleans up any active materialized 7zz engine directory and binary.
+pub fn clean_materialized_engine() {
+    let mut guard = MATERIALIZED_ENGINE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(path) = guard.take() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+}
+
+/// Scans temporary directory and cleans up stale engine folders left by dead processes.
+#[cfg(unix)]
+fn clean_stale_engine_dirs() {
+    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let s = name.to_string_lossy();
+            if s.starts_with(".unarc_engine_") {
+                let parts: Vec<&str> = s.split('_').collect();
+                if parts.len() >= 3 {
+                    if let Ok(pid) = parts[2].parse::<libc::pid_t>() {
+                        let is_dead = unsafe {
+                            libc::kill(pid, 0) == -1
+                                && std::io::Error::last_os_error().raw_os_error()
+                                    == Some(libc::ESRCH)
+                        };
+                        if is_dead {
+                            let _ = std::fs::remove_dir_all(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn clean_stale_engine_dirs() {}
+
+/// Materializes the embedded 7zz engine payload into a secure temporary location.
+pub fn get_or_materialize_embedded_engine() -> Result<PathBuf, ArchiveError> {
+    let mut guard = MATERIALIZED_ENGINE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(ref path) = *guard {
+        if path.is_file() {
+            return Ok(path.clone());
+        }
+    }
+
+    // 1. Verify embedded payload integrity before writing anything to disk
+    verify_embedded_engine_integrity().map_err(|e| ArchiveError::BackendFailure {
+        backend: "bundled-7zz".to_string(),
+        message: format!("Embedded engine integrity check failed: {e}"),
+    })?;
+
+    // 2. Clean up any stale engine directories from dead PIDs
+    clean_stale_engine_dirs();
+
+    // 3. Create private user-owned directory with restrictive permissions (0700 on Unix)
+    let token = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let engine_dir =
+        std::env::temp_dir().join(format!(".unarc_engine_{}_{}", std::process::id(), token));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(false);
+        builder.mode(0o700);
+        builder
+            .create(&engine_dir)
+            .map_err(|e| ArchiveError::BackendFailure {
+                backend: "bundled-7zz".to_string(),
+                message: format!(
+                    "Failed to create secure engine directory '{}': {e}",
+                    engine_dir.display()
+                ),
+            })?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir(&engine_dir).map_err(|e| ArchiveError::BackendFailure {
+            backend: "bundled-7zz".to_string(),
+            message: format!(
+                "Failed to create secure engine directory '{}': {e}",
+                engine_dir.display()
+            ),
+        })?;
+    }
+
+    let bin_path = engine_dir.join("7zz");
+
+    // 4. Write binary payload
+    std::fs::write(&bin_path, EMBEDDED_7ZZ).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&engine_dir);
+        ArchiveError::BackendFailure {
+            backend: "bundled-7zz".to_string(),
+            message: format!("Failed to write embedded engine binary: {e}"),
+        }
+    })?;
+
+    // 5. Restrict permissions to read and execute only (0500 on Unix) to prevent post-creation modification
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(&bin_path, std::fs::Permissions::from_mode(0o500))
+        {
+            let _ = std::fs::remove_dir_all(&engine_dir);
+            return Err(ArchiveError::BackendFailure {
+                backend: "bundled-7zz".to_string(),
+                message: format!("Failed to set secure permissions on engine binary: {e}"),
+            });
+        }
+    }
+
+    // 6. Verify written file integrity
+    let written_hash = crate::security::integrity::compute_sha256(&bin_path).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&engine_dir);
+        ArchiveError::BackendFailure {
+            backend: "bundled-7zz".to_string(),
+            message: format!("Failed to verify written engine hash: {e}"),
+        }
+    })?;
+    let expected = crate::security::integrity::expected_engine_binary_sha256();
+    if !written_hash.eq_ignore_ascii_case(expected) {
+        let _ = std::fs::remove_dir_all(&engine_dir);
+        return Err(ArchiveError::BackendFailure {
+            backend: "bundled-7zz".to_string(),
+            message: format!("Written engine binary hash mismatch: {written_hash} != {expected}"),
+        });
+    }
+
+    // 7. Register atexit handler on Unix for automatic process exit cleanup
+    #[cfg(unix)]
+    {
+        if !ATEXIT_REGISTERED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            unsafe {
+                libc::atexit(atexit_cleanup);
+            }
+        }
+    }
+
+    *guard = Some(bin_path.clone());
+    Ok(bin_path)
+}
+
 /// Locates the bundled 7zz executable adhering strictly to hermetic bundling rules.
+///
+/// Priority order:
+/// 1. `UNARC_BUNDLED_7ZZ` environment variable override (for tests/CI).
+/// 2. Adjacent `7zz` binary on disk (`current_exe.parent().join("7zz")`).
+/// 3. Known hermetic container bundle locations (`/opt/unarc/bin/7zz`).
+/// 4. Materialized embedded 7zz engine (self-contained native distribution).
 ///
 /// Security constraints:
 /// - NEVER queries the system PATH.
@@ -80,6 +296,11 @@ pub fn resolve_bundled_engine() -> Result<PathBuf, ArchiveError> {
         if p.is_file() {
             return Ok(p.to_path_buf());
         }
+    }
+
+    // 4. Materialize embedded engine if available (single-file self-contained distribution)
+    if has_embedded_engine() {
+        return get_or_materialize_embedded_engine();
     }
 
     Err(ArchiveError::BackendFailure {
@@ -791,5 +1012,30 @@ mod tests {
         assert_eq!(updates.len(), 3);
         assert_eq!(updates[1], (50, Some("test_file.pkg".to_string())));
         assert_eq!(updates[2], (100, None));
+    }
+
+    #[test]
+    fn test_embedded_engine_tamper_rejection() {
+        let tampered = b"this is completely invalid engine payload";
+        let res = verify_engine_bytes_integrity(tampered);
+        assert!(res.is_err());
+        assert!(matches!(
+            res,
+            Err(crate::error::SecurityError::PolicyViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn test_embedded_engine_empty_payload_rejection() {
+        let empty = b"";
+        let res = verify_engine_bytes_integrity(empty);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_clean_materialized_engine() {
+        clean_materialized_engine();
+        let guard = MATERIALIZED_ENGINE.lock().unwrap();
+        assert!(guard.is_none());
     }
 }

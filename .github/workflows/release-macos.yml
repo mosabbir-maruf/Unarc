@@ -39,6 +39,8 @@ jobs:
           fi
 
       - name: Build release binaries
+        env:
+          UNARC_EMBED_7ZZ_PATH: target/release/7zz
         run: cargo build --release --target aarch64-apple-darwin
 
       - name: Stage native binaries
@@ -58,6 +60,19 @@ jobs:
           ./target/release/unarc extract /tmp/smoke.zip --output /tmp/smoke_out
           cat /tmp/smoke_out/smoke.txt | grep "smoke_test_content"
           rm -rf /tmp/smoke*
+
+      - name: Verify self-contained standalone execution (no adjacent 7zz)
+        run: |
+          mkdir -p /tmp/standalone_test
+          cp target/release/unarc /tmp/standalone_test/unarc
+          cd /tmp/standalone_test
+          echo "standalone_test_content" > standalone.txt
+          python3 -c "import zipfile; z = zipfile.ZipFile('standalone.zip', 'w'); z.write('standalone.txt', 'standalone.txt')"
+          ./unarc test standalone.zip
+          ./unarc extract standalone.zip --output out
+          grep -q "standalone_test_content" out/standalone.txt
+          cd -
+          rm -rf /tmp/standalone_test
 
       - name: Package, hash, and sign release artifact
         env:

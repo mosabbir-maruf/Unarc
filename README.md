@@ -371,20 +371,39 @@ cd Unarc
 cargo run --release
 ```
 
-#### Developer Workflow Commands
+#### Developer Workflow & Makefile Commands
+
+Unarc includes a `Makefile` that wraps the containerized dev toolchain (`./scripts/dev.sh`) for fast local development and automated CI checks:
 
 ```bash
-# Full automated verification suite (fmt, clippy, tests, release build)
-./scripts/dev.sh check    # (or: make check)
+# Automated verification suite (fmt-check, clippy, tests, release build)
+make check
 
-# Run tests
-./scripts/dev.sh test     # (or: make test)
+# Code formatting & linting
+make fmt          # Automatically format code
+make fmt-check    # Check formatting without modifying files
+make clippy       # Run Clippy linter with warnings denied (-D warnings)
 
-# Format codebase
-./scripts/dev.sh fmt      # (or: make fmt)
+# Testing & compilation
+make test         # Run unit and integration tests
+make build        # Compile debug binary
+make release      # Compile optimized release binary
+make bench        # Run performance benchmarks
 
-# Clippy linter
-./scripts/dev.sh clippy   # (or: make clippy)
+# Docker images & cleanup
+make docker-build # Build development Docker container image (unarc-dev)
+make docker-prod  # Build hardened distroless production container (unarc:latest)
+make clean        # Remove local build artifacts (target/)
+```
+
+You can also run the underlying helper scripts directly:
+
+```bash
+# Direct dev script invocation
+./scripts/dev.sh check
+./scripts/dev.sh test
+./scripts/dev.sh fmt
+./scripts/dev.sh clippy
 
 # Containerized runtime verifications
 ./scripts/verify-docker.sh unarc:latest

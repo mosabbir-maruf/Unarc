@@ -5,8 +5,7 @@
 **An open-source, production-grade, security-focused archive utility CLI in Rust.**
 
 <p align="center">
-  Targeting <b>macOS Apple Silicon</b> (<code>aarch64-apple-darwin</code>), <b>Linux</b> (<code>x86_64</code>, <code>aarch64</code>), and <b>Docker</b> distroless container runtime.<br>
-  Zero-trust path containment, interactive terminal UX, deterministic exit codes, and an authentic bundled engine (<code>7zz v26.03</code>).
+  Targeting <b>macOS Apple Silicon</b> (<code>aarch64-apple-darwin</code>), <b>Linux</b> (<code>x86_64</code>, <code>aarch64</code>), and <b>Docker</b> distroless container runtime. Zero-trust path containment, interactive terminal UX, deterministic exit codes, and an authentic bundled engine (<code>7zz v26.03</code>).
 </p>
 
 <p align="center">

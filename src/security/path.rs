@@ -125,6 +125,93 @@ pub fn verify_boundary_containment(
     Ok(target)
 }
 
+/// Formats an I/O error into a concise, human-readable cause string without redundant prefixes.
+#[must_use]
+pub fn format_os_error(err: &std::io::Error) -> String {
+    #[cfg(unix)]
+    if let Some(code) = err.raw_os_error() {
+        if code == 1 {
+            return "Operation not permitted".to_string();
+        } else if code == 13 {
+            return "Permission denied".to_string();
+        } else if code == 30 {
+            return "Read-only file system".to_string();
+        }
+    }
+    err.to_string()
+}
+
+/// RAII guard ensuring temporary probe files are deleted on drop in all exit paths.
+struct SafeProbeGuard<'a> {
+    probe_path: &'a Path,
+    created: bool,
+}
+
+impl Drop for SafeProbeGuard<'_> {
+    fn drop(&mut self) {
+        if self.created {
+            let _ = std::fs::remove_file(self.probe_path);
+        }
+    }
+}
+
+/// Probes whether a directory is genuinely writable by the current process.
+///
+/// Creates a uniquely named temporary probe file and immediately unlinks it.
+/// Uses `create_new(true)` to guarantee no pre-existing files are overwritten,
+/// and an RAII drop guard to ensure cleanup even on panic or error.
+pub fn probe_directory_writable(dir: &Path) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    let pid = std::process::id();
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+
+    let probe_name = format!(".unarc_probe_{pid}_{nanos}_{count}.tmp");
+    let probe_path = dir.join(probe_name);
+
+    let mut guard = SafeProbeGuard {
+        probe_path: &probe_path,
+        created: false,
+    };
+
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe_path)?;
+
+    guard.created = true;
+    drop(file);
+
+    let remove_res = std::fs::remove_file(&probe_path);
+    if remove_res.is_ok() {
+        guard.created = false;
+    }
+    remove_res
+}
+
+/// Finds the nearest existing ancestor directory for a given path.
+/// If `path` exists, returns `path.to_path_buf()`.
+#[must_use]
+pub fn find_nearest_existing_ancestor(path: &Path) -> PathBuf {
+    let mut current = path.to_path_buf();
+    while !current.exists() {
+        if let Some(parent) = current.parent() {
+            if parent == current || parent.as_os_str().is_empty() {
+                return PathBuf::from(".");
+            }
+            current = parent.to_path_buf();
+        } else {
+            return PathBuf::from(".");
+        }
+    }
+    current
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -53,9 +53,16 @@ pub fn run_test_with_prompt<P: PasswordPrompter>(
     prompter: &P,
     show_progress: bool,
 ) -> Result<ArchiveTestResult> {
+    let archive_bytes = std::fs::metadata(archive)
+        .ok()
+        .map(|m| m.len())
+        .unwrap_or(0);
     let run_with_bar = |pwd: Option<&str>| -> Result<ArchiveTestResult> {
         if show_progress {
             let mut bar = crate::cli::progress::ProgressBar::new("Testing");
+            if archive_bytes > 0 {
+                bar.set_total_bytes(archive_bytes);
+            }
             let res = app.test_archive_with_progress(archive, pwd, Some(&mut bar));
             bar.finish();
             res
@@ -87,14 +94,26 @@ pub fn run_extract_with_prompt<P: PasswordPrompter>(
     prompter: &P,
     show_progress: bool,
 ) -> Result<ArchiveExtractResult> {
+    // Centralized preflight validation executes upfront before creating progress UI or spawning engine
+    let preflight = app.preflight_extract(archive, output)?;
+    let archive_bytes: u64 = preflight
+        .volume_set
+        .volumes
+        .iter()
+        .filter_map(|v| std::fs::metadata(v).ok().map(|m| m.len()))
+        .sum();
+
     let run_with_bar = |pwd: Option<&str>| -> Result<ArchiveExtractResult> {
         if show_progress {
             let mut bar = crate::cli::progress::ProgressBar::new("Extracting");
-            let res = app.extract_archive_with_progress(archive, output, pwd, Some(&mut bar));
+            if archive_bytes > 0 {
+                bar.set_total_bytes(archive_bytes);
+            }
+            let res = app.extract_with_preflight(&preflight, pwd, Some(&mut bar));
             bar.finish();
             res
         } else {
-            app.extract_archive(archive, output, pwd)
+            app.extract_with_preflight(&preflight, pwd, None)
         }
     };
 

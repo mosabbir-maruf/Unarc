@@ -578,9 +578,11 @@ impl SevenZipBackend {
         }
 
         if combined.contains("Permission denied") || combined.contains("Access is denied") {
-            return Err(ArchiveError::PermissionDenied {
-                path: path.to_string_lossy().to_string(),
-            });
+            return Err(ArchiveError::permission_denied(
+                "archive",
+                path.to_string_lossy(),
+                "Permission denied",
+            ));
         }
 
         if combined.contains("Cannot find volume")
@@ -661,9 +663,17 @@ impl SevenZipBackend {
 
         // Create destination directory if it does not already exist
         std::fs::create_dir_all(destination).map_err(|e| match e.kind() {
-            std::io::ErrorKind::PermissionDenied => ArchiveError::PermissionDenied {
-                path: destination.display().to_string(),
-            },
+            std::io::ErrorKind::PermissionDenied => ArchiveError::permission_denied(
+                "destination",
+                destination.display().to_string(),
+                crate::security::path::format_os_error(&e),
+            ),
+            #[cfg(unix)]
+            _ if e.raw_os_error() == Some(1) => ArchiveError::permission_denied(
+                "destination",
+                destination.display().to_string(),
+                crate::security::path::format_os_error(&e),
+            ),
             _ => ArchiveError::OutputInvalid {
                 path: destination.display().to_string(),
                 reason: e.to_string(),
@@ -732,9 +742,11 @@ impl SevenZipBackend {
         }
 
         if combined.contains("Permission denied") || combined.contains("Access is denied") {
-            return Err(ArchiveError::PermissionDenied {
-                path: destination.display().to_string(),
-            });
+            return Err(ArchiveError::permission_denied(
+                "destination",
+                destination.display().to_string(),
+                "Permission denied",
+            ));
         }
 
         if combined.contains("Cannot find volume")

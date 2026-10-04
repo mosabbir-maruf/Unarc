@@ -48,6 +48,9 @@ pub struct ArchiveExtractResult {
 pub trait ProgressListener: Send {
     /// Invoked whenever the progress percentage or current file updates.
     fn on_progress(&mut self, percentage: u8, current_file: Option<&str>);
+
+    /// Optionally sets or updates the total bytes for the operation.
+    fn set_total_bytes(&mut self, _total_bytes: u64) {}
 }
 
 /// Contract for archive engine backends (e.g. bundled 7zz).

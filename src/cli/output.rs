@@ -451,7 +451,12 @@ impl OutputFormatter {
             });
             eprintln!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
         } else {
-            let sanitized_msg = crate::cli::progress::sanitize_terminal_text(&error.to_string());
+            let raw_msg = error.to_string();
+            let sanitized_msg = raw_msg
+                .lines()
+                .map(crate::cli::progress::sanitize_terminal_text)
+                .collect::<Vec<_>>()
+                .join("\n");
             if self.color_enabled {
                 eprintln!(
                     "\x1b[1;31merror\x1b[0m \x1b[90m[{}]\x1b[0m: {sanitized_msg}",
@@ -460,7 +465,10 @@ impl OutputFormatter {
             } else {
                 eprintln!("error [{}]: {sanitized_msg}", code.as_str());
             }
-            if let Some(hint) = error_hint(code) {
+            if let Some(hint) = error_hint_for_error(error) {
+                if sanitized_msg.contains('\n') {
+                    eprintln!();
+                }
                 if self.color_enabled {
                     eprintln!("  \x1b[1mHint:\x1b[0m {hint}");
                 } else {
@@ -472,6 +480,71 @@ impl OutputFormatter {
             }
         }
     }
+}
+
+/// Helper detecting common macOS TCC-protected locations (e.g. /Volumes, Desktop, Documents, Downloads).
+fn is_macos_tcc_location(path_str: &str) -> bool {
+    let path = std::path::Path::new(path_str);
+    if path.starts_with("/Volumes") {
+        return true;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let home_path = std::path::Path::new(&home);
+        if path.starts_with(home_path.join("Desktop"))
+            || path.starts_with(home_path.join("Documents"))
+            || path.starts_with(home_path.join("Downloads"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns an actionable user-facing hint tailored to the specific error, if available.
+#[must_use]
+pub fn error_hint_for_error(error: &UnarcError) -> Option<String> {
+    let code = error.code();
+    if code == crate::error::ErrorCode::PermissionDenied {
+        let is_macos_privacy = match error {
+            UnarcError::Archive(crate::error::ArchiveError::PermissionDenied {
+                path,
+                cause,
+                ..
+            }) => {
+                cause.contains("Operation not permitted")
+                    || cause.contains("os error 1")
+                    || path.starts_with("/Volumes")
+                    || is_macos_tcc_location(path)
+            }
+            UnarcError::Security(crate::error::SecurityError::PermissionDenied { operation }) => {
+                operation.contains("Operation not permitted")
+                    || operation.contains("os error 1")
+                    || operation.contains("/Volumes")
+            }
+            UnarcError::Platform(crate::error::PlatformError::PermissionDenied { operation }) => {
+                operation.contains("Operation not permitted")
+                    || operation.contains("os error 1")
+                    || operation.contains("/Volumes")
+            }
+            UnarcError::Io(err) => {
+                #[cfg(unix)]
+                let is_eperm = err.raw_os_error() == Some(1);
+                #[cfg(not(unix))]
+                let is_eperm = false;
+                is_eperm || err.to_string().contains("Operation not permitted")
+            }
+            _ => false,
+        };
+
+        if is_macos_privacy {
+            return Some(
+                "Grant Unarc access to this location in macOS Privacy & Security, then retry."
+                    .to_string(),
+            );
+        }
+    }
+
+    error_hint(code).map(|s| s.to_string())
 }
 
 /// Returns an actionable user-facing hint for a given error code, if available.
@@ -658,5 +731,32 @@ mod tests {
         // Just verify print_row and print_subrow do not panic
         fmt.print_row("Test Label:", "Test Value");
         fmt.print_subrow("Sub Label:", "Sub Value");
+    }
+
+    #[test]
+    fn test_error_hint_for_error_macos_privacy() {
+        let macos_err: UnarcError = crate::error::ArchiveError::permission_denied(
+            "destination",
+            "/Volumes/PS5",
+            "Operation not permitted",
+        )
+        .into();
+        let hint = error_hint_for_error(&macos_err).unwrap();
+        assert_eq!(
+            hint,
+            "Grant Unarc access to this location in macOS Privacy & Security, then retry."
+        );
+
+        let standard_err: UnarcError = crate::error::ArchiveError::permission_denied(
+            "destination",
+            "/tmp/dest",
+            "Permission denied",
+        )
+        .into();
+        let hint_std = error_hint_for_error(&standard_err).unwrap();
+        assert_eq!(
+            hint_std,
+            "Check filesystem permissions for read access to the archive and write access to destination."
+        );
     }
 }

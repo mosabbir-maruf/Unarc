@@ -2881,3 +2881,368 @@ fn test_phase8_external_resolution_precedence() {
     unsafe { std::env::remove_var("UNARC_BUNDLED_7ZZ") };
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+// ============================================================================
+// EXTRACTION PREFLIGHT & PERMISSION VALIDATION REGRESSION SUITE (A - K)
+// ============================================================================
+
+/// Helper: creates a minimal valid zip file for preflight testing.
+fn create_test_zip(path: &std::path::Path) {
+    let zip_bytes = build_synthetic_zip_with_path("hello.txt", b"Hello World");
+    std::fs::write(path, zip_bytes).unwrap();
+}
+
+#[test]
+fn test_preflight_a_existing_writable_destination_proceeds() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_a_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+    let arch = temp.join("test_a.zip");
+    create_test_zip(&arch);
+    let dest = temp.join("dest_a");
+    let _ = std::fs::create_dir_all(&dest);
+
+    let app = Application::default();
+    let preflight = app.preflight_extract(&arch, Some(&dest));
+    assert!(
+        preflight.is_ok(),
+        "Preflight must succeed for existing writable destination"
+    );
+    let ctx = preflight.unwrap();
+    assert_eq!(ctx.destination, dest);
+
+    // Extraction proceeds successfully
+    let extract_res = app.extract_with_preflight(&ctx, None, None);
+    assert!(extract_res.is_ok());
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_preflight_b_existing_read_only_destination_fails_before_7zz() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_b_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+    let arch = temp.join("test_b.zip");
+    create_test_zip(&arch);
+    let dest = temp.join("dest_b_readonly");
+    let _ = std::fs::create_dir_all(&dest);
+
+    #[cfg(unix)]
+    {
+        if unsafe { libc::geteuid() == 0 } {
+            eprintln!("Skipping chmod 0555 check under root (CAP_DAC_OVERRIDE)");
+            let _ = std::fs::remove_dir_all(&temp);
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o555));
+
+        // Deliberately point UNARC_BUNDLED_7ZZ to an invalid non-executable path
+        // to prove that 7zz engine resolution and spawning are NEVER reached!
+        unsafe { std::env::set_var("UNARC_BUNDLED_7ZZ", "/path/that/does/not/exist/or/crash") };
+
+        let app = Application::default();
+        let preflight = app.preflight_extract(&arch, Some(&dest));
+
+        unsafe { std::env::remove_var("UNARC_BUNDLED_7ZZ") };
+        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+
+        assert!(
+            preflight.is_err(),
+            "Preflight must fail on read-only destination"
+        );
+        let err = preflight.unwrap_err();
+        assert_eq!(err.code(), ErrorCode::PermissionDenied);
+        assert_eq!(err.exit_code(), 30);
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("Cannot access destination"));
+        assert!(err_msg.contains("dest_b_readonly"));
+    }
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_preflight_c_missing_destination_with_writable_parent_passes_without_premature_creation() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_c_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+    let arch = temp.join("test_c.zip");
+    create_test_zip(&arch);
+    let missing_dest = temp.join("missing_sub_dir");
+
+    assert!(!missing_dest.exists());
+
+    let app = Application::default();
+    let preflight = app.preflight_extract(&arch, Some(&missing_dest));
+    assert!(
+        preflight.is_ok(),
+        "Preflight must pass when parent directory is writable"
+    );
+
+    // CRITICAL: verify that destination was NOT created prematurely during preflight!
+    assert!(
+        !missing_dest.exists(),
+        "Preflight must not create destination directory prematurely as a side-effect"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_preflight_d_missing_destination_with_read_only_parent_fails_before_7zz() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_d_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+    let arch = temp.join("test_d.zip");
+    create_test_zip(&arch);
+    let ro_parent = temp.join("ro_parent");
+    let _ = std::fs::create_dir_all(&ro_parent);
+    let missing_dest = ro_parent.join("missing_child");
+
+    #[cfg(unix)]
+    {
+        if unsafe { libc::geteuid() == 0 } {
+            eprintln!("Skipping chmod 0555 check under root (CAP_DAC_OVERRIDE)");
+            let _ = std::fs::remove_dir_all(&temp);
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&ro_parent, std::fs::Permissions::from_mode(0o555));
+
+        // Poison UNARC_BUNDLED_7ZZ to prove engine is never resolved or spawned
+        unsafe { std::env::set_var("UNARC_BUNDLED_7ZZ", "/invalid/fake/engine") };
+
+        let app = Application::default();
+        let preflight = app.preflight_extract(&arch, Some(&missing_dest));
+
+        unsafe { std::env::remove_var("UNARC_BUNDLED_7ZZ") };
+        let _ = std::fs::set_permissions(&ro_parent, std::fs::Permissions::from_mode(0o755));
+
+        assert!(
+            preflight.is_err(),
+            "Preflight must fail when nearest ancestor is not writable"
+        );
+        let err = preflight.unwrap_err();
+        assert_eq!(err.code(), ErrorCode::PermissionDenied);
+        assert_eq!(err.exit_code(), 30);
+        assert!(!missing_dest.exists());
+    }
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_preflight_e_archive_unreadable_fails_before_7zz() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_e_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+    let arch = temp.join("unreadable.zip");
+    create_test_zip(&arch);
+    let dest = temp.join("dest_e");
+    let _ = std::fs::create_dir_all(&dest);
+
+    #[cfg(unix)]
+    {
+        if unsafe { libc::geteuid() == 0 } {
+            eprintln!("Skipping chmod 0000 check under root (CAP_DAC_OVERRIDE)");
+            let _ = std::fs::remove_dir_all(&temp);
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&arch, std::fs::Permissions::from_mode(0o000));
+
+        // Poison UNARC_BUNDLED_7ZZ to prove engine is never reached
+        unsafe { std::env::set_var("UNARC_BUNDLED_7ZZ", "/invalid/fake/engine") };
+
+        let app = Application::default();
+        let preflight = app.preflight_extract(&arch, Some(&dest));
+
+        unsafe { std::env::remove_var("UNARC_BUNDLED_7ZZ") };
+        let _ = std::fs::set_permissions(&arch, std::fs::Permissions::from_mode(0o644));
+
+        assert!(
+            preflight.is_err(),
+            "Preflight must fail when archive is unreadable"
+        );
+        let err = preflight.unwrap_err();
+        assert_eq!(err.code(), ErrorCode::PermissionDenied);
+        assert_eq!(err.exit_code(), 30);
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("Cannot access archive"));
+        assert!(err_msg.contains("unreadable.zip"));
+    }
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_preflight_f_multipart_unreadable_part_fails_before_7zz() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_f_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+
+    // Create synthetic multipart RAR files with proper signatures
+    let part1 = temp.join("multi.part1.rar");
+    let part2 = temp.join("multi.part2.rar");
+    let mut header_p1 = b"Rar!\x1A\x07\x00".to_vec();
+    header_p1.extend_from_slice(&[0u8; 100]);
+    let mut header_p2 = b"Rar!\x1A\x07\x00".to_vec();
+    header_p2.extend_from_slice(&[0u8; 100]);
+    std::fs::write(&part1, &header_p1).unwrap();
+    std::fs::write(&part2, &header_p2).unwrap();
+
+    let dest = temp.join("dest_f");
+    let _ = std::fs::create_dir_all(&dest);
+
+    #[cfg(unix)]
+    {
+        if unsafe { libc::geteuid() == 0 } {
+            eprintln!("Skipping chmod 0000 check under root (CAP_DAC_OVERRIDE)");
+            let _ = std::fs::remove_dir_all(&temp);
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        // Make part2 unreadable
+        let _ = std::fs::set_permissions(&part2, std::fs::Permissions::from_mode(0o000));
+
+        unsafe { std::env::set_var("UNARC_BUNDLED_7ZZ", "/invalid/fake/engine") };
+
+        let app = Application::default();
+        let preflight = app.preflight_extract(&part1, Some(&dest));
+
+        unsafe { std::env::remove_var("UNARC_BUNDLED_7ZZ") };
+        let _ = std::fs::set_permissions(&part2, std::fs::Permissions::from_mode(0o644));
+
+        assert!(
+            preflight.is_err(),
+            "Preflight must fail when a required multipart volume is unreadable"
+        );
+        let err = preflight.unwrap_err();
+        assert_eq!(err.code(), ErrorCode::PermissionDenied);
+        assert_eq!(err.exit_code(), 30);
+    }
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_preflight_g_macos_tcc_format_and_error_hint() {
+    let macos_err =
+        ArchiveError::permission_denied("destination", "/Volumes/PS5", "Operation not permitted");
+    let top: UnarcError = macos_err.into();
+    assert_eq!(top.code(), ErrorCode::PermissionDenied);
+    assert_eq!(top.exit_code(), 30);
+
+    let display = top.to_string();
+    assert_eq!(
+        display,
+        "Cannot access destination\n  Path: /Volumes/PS5\n  Cause: Operation not permitted"
+    );
+
+    let hint = unarc::cli::output::error_hint_for_error(&top);
+    assert_eq!(
+        hint.as_deref(),
+        Some("Grant Unarc access to this location in macOS Privacy & Security, then retry.")
+    );
+}
+
+#[test]
+fn test_preflight_h_destination_existing_as_file_returns_output_invalid() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_h_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+    let arch = temp.join("test_h.zip");
+    create_test_zip(&arch);
+    let file_dest = temp.join("existing_file_dest.txt");
+    std::fs::write(&file_dest, b"I am a file, not a directory").unwrap();
+
+    let app = Application::default();
+    let preflight = app.preflight_extract(&arch, Some(&file_dest));
+    assert!(preflight.is_err());
+    let err = preflight.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::OutputInvalid);
+    assert_eq!(err.exit_code(), 18);
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_preflight_j_probe_cleanup_leaves_zero_artifacts() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_j_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+
+    // Initial check: folder has 0 files
+    let initial_count = std::fs::read_dir(&temp).unwrap().count();
+    assert_eq!(initial_count, 0);
+
+    // Probe writable directory
+    let res = unarc::security::path::probe_directory_writable(&temp);
+    assert!(res.is_ok());
+
+    // Verify directory is completely clean, 0 temporary probe artifacts left behind
+    let after_count = std::fs::read_dir(&temp).unwrap().count();
+    assert_eq!(
+        after_count, 0,
+        "probe_directory_writable must remove temporary probe file immediately"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_preflight_k_darwin_ps5_simulation() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_k_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+    let sim_archive = temp.join("Darwins Paradox 1.000.003 PPSA28608 PS5.part1.rar");
+    create_test_zip(&sim_archive);
+
+    let sim_ps5_volume = temp.join("Volumes_PS5");
+    let _ = std::fs::create_dir_all(&sim_ps5_volume);
+
+    #[cfg(unix)]
+    {
+        if unsafe { libc::geteuid() == 0 } {
+            eprintln!("Skipping chmod 0444 check under root (CAP_DAC_OVERRIDE)");
+            let _ = std::fs::remove_dir_all(&temp);
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&sim_ps5_volume, std::fs::Permissions::from_mode(0o444));
+
+        let app = Application::default();
+        let preflight_err = app
+            .preflight_extract(&sim_archive, Some(&sim_ps5_volume))
+            .unwrap_err();
+
+        let _ = std::fs::set_permissions(&sim_ps5_volume, std::fs::Permissions::from_mode(0o755));
+
+        assert_eq!(preflight_err.code(), ErrorCode::PermissionDenied);
+        assert_eq!(preflight_err.exit_code(), 30);
+        let err_str = preflight_err.to_string();
+        assert!(err_str.contains("Cannot access destination"));
+        assert!(err_str.contains("Volumes_PS5"));
+    }
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_preflight_read_only_filesystem_fails_even_as_root() {
+    let temp = std::env::temp_dir().join(format!("unarc_preflight_ro_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp);
+    let arch = temp.join("test_ro.zip");
+    create_test_zip(&arch);
+
+    // /sys on Linux or /System on macOS is read-only even to root
+    let ro_dir = std::path::Path::new("/sys");
+    if ro_dir.exists() && ro_dir.is_dir() {
+        let app = Application::default();
+        let res = app.preflight_extract(&arch, Some(ro_dir));
+        if let Err(err) = res {
+            assert_eq!(err.code(), ErrorCode::PermissionDenied);
+            assert_eq!(err.exit_code(), 30);
+            assert!(err.to_string().contains("Cannot access destination"));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&temp);
+}

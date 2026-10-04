@@ -118,7 +118,7 @@ pub enum UnarcError {
     Security(#[from] SecurityError),
 
     /// Archive format, engine, or password error.
-    #[error("Archive error: {0}")]
+    #[error("{0}")]
     Archive(#[from] ArchiveError),
 
     /// Platform-specific operation error.
@@ -266,8 +266,12 @@ pub enum ArchiveError {
     BackendFailure { backend: String, message: String },
 
     /// Permission denied when accessing archive or destination.
-    #[error("Permission denied: {path}")]
-    PermissionDenied { path: String },
+    #[error("Cannot access {target}\n  Path: {path}\n  Cause: {cause}")]
+    PermissionDenied {
+        target: String,
+        path: String,
+        cause: String,
+    },
 
     /// A required volume for a multipart archive is missing.
     #[error("MISSING_VOLUME: required volume '{expected}' not found ({details})")]
@@ -276,6 +280,22 @@ pub enum ArchiveError {
     /// An archive volume is invalid, mismatched, or corrupted.
     #[error("INVALID_VOLUME: volume '{path}' is invalid ({reason})")]
     InvalidVolume { path: String, reason: String },
+}
+
+impl ArchiveError {
+    /// Constructs a structured permission denied error with target, path, and formatted cause.
+    #[must_use]
+    pub fn permission_denied(
+        target: impl Into<String>,
+        path: impl Into<String>,
+        cause: impl Into<String>,
+    ) -> Self {
+        Self::PermissionDenied {
+            target: target.into(),
+            path: path.into(),
+            cause: cause.into(),
+        }
+    }
 }
 
 /// Platform capability and environment errors.
@@ -475,6 +495,21 @@ mod tests {
         assert_eq!(
             invalid_vol.to_string(),
             "INVALID_VOLUME: volume 'archive.part1.rar' is invalid (corrupted header)"
+        );
+
+        let perm_err = ArchiveError::permission_denied(
+            "destination",
+            "/Volumes/PS5",
+            "Operation not permitted",
+        );
+        assert_eq!(
+            perm_err.to_string(),
+            "Cannot access destination\n  Path: /Volumes/PS5\n  Cause: Operation not permitted"
+        );
+        let top_perm: UnarcError = perm_err.into();
+        assert_eq!(
+            top_perm.to_string(),
+            "Cannot access destination\n  Path: /Volumes/PS5\n  Cause: Operation not permitted"
         );
     }
 }

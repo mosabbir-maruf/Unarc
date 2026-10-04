@@ -6,13 +6,22 @@ use crate::archive::bundled::{
 };
 use crate::archive::format::ArchiveFormat;
 use crate::archive::metadata::ArchiveMetadata;
-use crate::archive::volume::VolumeResolver;
+use crate::archive::volume::{VolumeResolver, VolumeSet};
 use crate::error::{ArchiveError, Result, UnarcError};
 use crate::platform::PlatformInfo;
 use crate::security::{
     ProcessSandboxPolicy, SandboxRunner, SandboxStatus, ScratchWorkspace, SecurityContext,
     SecurityPolicy,
 };
+
+/// Preflight validation context containing verified volume set and output destination.
+#[derive(Debug, Clone)]
+pub struct ExtractionPreflight {
+    /// Deterministically resolved volume set for the archive.
+    pub volume_set: VolumeSet,
+    /// Verified, sanitized destination directory path.
+    pub destination: PathBuf,
+}
 
 /// RAII guard ensuring incomplete extractions are cleaned up on failure or interruption.
 #[derive(Debug)]
@@ -500,6 +509,23 @@ impl Application {
                 }
                 .into());
             }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(ArchiveError::permission_denied(
+                    "archive",
+                    path.to_string_lossy(),
+                    crate::security::path::format_os_error(&e),
+                )
+                .into());
+            }
+            #[cfg(unix)]
+            Err(e) if e.raw_os_error() == Some(1) => {
+                return Err(ArchiveError::permission_denied(
+                    "archive",
+                    path.to_string_lossy(),
+                    crate::security::path::format_os_error(&e),
+                )
+                .into());
+            }
             Err(e) => return Err(UnarcError::Io(e)),
         };
 
@@ -518,7 +544,30 @@ impl Application {
             .into());
         }
 
-        Ok(meta)
+        // Verify read accessibility without reading or decompressing the entire file
+        match std::fs::File::open(path) {
+            Ok(_) => Ok(meta),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ArchiveError::FileNotFound {
+                path: path.to_string_lossy().to_string(),
+            }
+            .into()),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                Err(ArchiveError::permission_denied(
+                    "archive",
+                    path.to_string_lossy(),
+                    crate::security::path::format_os_error(&e),
+                )
+                .into())
+            }
+            #[cfg(unix)]
+            Err(e) if e.raw_os_error() == Some(1) => Err(ArchiveError::permission_denied(
+                "archive",
+                path.to_string_lossy(),
+                crate::security::path::format_os_error(&e),
+            )
+            .into()),
+            Err(e) => Err(UnarcError::Io(e)),
+        }
     }
 
     /// Tests the integrity of an archive.
@@ -584,53 +633,15 @@ impl Application {
         Ok(res)
     }
 
-    /// Securely extracts an archive to a specified or default destination.
-    pub fn extract_archive(
+    /// Resolves the extraction destination directory based on optional user output or default archive stem.
+    pub fn resolve_extraction_destination(
         &self,
         path: &Path,
         output: Option<&Path>,
-        password: Option<&str>,
-    ) -> Result<ArchiveExtractResult> {
-        self.extract_archive_with_progress(path, output, password, None)
-    }
-
-    /// Securely extracts an archive with optional real-time progress streaming.
-    pub fn extract_archive_with_progress(
-        &self,
-        path: &Path,
-        output: Option<&Path>,
-        password: Option<&str>,
-        progress: Option<&mut dyn crate::archive::ProgressListener>,
-    ) -> Result<ArchiveExtractResult> {
-        // Fail-closed enforcement check: if policy strictly mandates kernel-level sandbox confinement,
-        // verify that the OS kernel sandbox is actively enforced.
-        if self.security_context.policy().require_kernel_sandbox {
-            let status = SandboxRunner::probe_status();
-            if status != SandboxStatus::Enforced {
-                return Err(crate::error::SecurityError::PolicyViolation {
-                    reason: format!(
-                        "require_kernel_sandbox violation: strict kernel sandbox is required by security policy, but current status is {:?}",
-                        status
-                    ),
-                }
-                .into());
-            }
-        }
-
-        self.validate_input_archive_file(path)?;
-
-        // 1. Deterministic volume resolution (fails immediately on missing or invalid volumes)
-        let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
-
-        // 2. Verify engine binary integrity upfront before execution
-        let engine_path = resolve_bundled_engine()?;
-        crate::security::integrity::verify_bundled_engine_integrity(&engine_path)?;
-
-        // 3. Determine destination directory
-        let destination = if let Some(out) = output {
-            out.to_path_buf()
+    ) -> Result<PathBuf> {
+        if let Some(out) = output {
+            Ok(out.to_path_buf())
         } else {
-            // Default stem directory in current working directory
             let file_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -649,26 +660,225 @@ impl Application {
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| "extracted".to_string())
             };
-            std::env::current_dir()?.join(clean_stem)
-        };
+            Ok(std::env::current_dir()?.join(clean_stem))
+        }
+    }
 
-        if let Ok(dest_meta) = std::fs::metadata(&destination) {
-            if !dest_meta.is_dir() {
-                return Err(ArchiveError::OutputInvalid {
-                    path: destination.display().to_string(),
-                    reason: "Destination exists but is not a directory".to_string(),
+    /// Performs centralized extraction preflight validation before spawning the engine or beginning extraction.
+    ///
+    /// Validates archive accessibility, deterministic multipart resolution, and destination directory write permissions.
+    pub fn preflight_extract(
+        &self,
+        path: &Path,
+        output: Option<&Path>,
+    ) -> Result<ExtractionPreflight> {
+        // 1. Fail-closed enforcement check: if policy strictly mandates kernel-level sandbox confinement,
+        // verify that the OS kernel sandbox is actively enforced.
+        if self.security_context.policy().require_kernel_sandbox {
+            let status = SandboxRunner::probe_status();
+            if status != SandboxStatus::Enforced {
+                return Err(crate::error::SecurityError::PolicyViolation {
+                    reason: format!(
+                        "require_kernel_sandbox violation: strict kernel sandbox is required by security policy, but current status is {:?}",
+                        status
+                    ),
                 }
                 .into());
             }
         }
 
-        // 3. Pre-extract security inspection:
+        // 2. Validate input archive file existence, regular file type, and read access
+        self.validate_input_archive_file(path)?;
+
+        // 3. Deterministic volume sequence resolution (fails early if multipart volumes are missing or invalid)
+        let volume_set = VolumeResolver::resolve(path, self.security_context.policy())?;
+
+        // 4. Verify readability of all resolved volumes
+        for vol in &volume_set.volumes {
+            let _ = std::fs::File::open(vol).map_err(|e| match e.kind() {
+                std::io::ErrorKind::PermissionDenied => ArchiveError::permission_denied(
+                    "archive volume",
+                    vol.display().to_string(),
+                    crate::security::path::format_os_error(&e),
+                ),
+                #[cfg(unix)]
+                _ if e.raw_os_error() == Some(1) => ArchiveError::permission_denied(
+                    "archive volume",
+                    vol.display().to_string(),
+                    crate::security::path::format_os_error(&e),
+                ),
+                _ => ArchiveError::permission_denied(
+                    "archive volume",
+                    vol.display().to_string(),
+                    crate::security::path::format_os_error(&e),
+                ),
+            })?;
+        }
+
+        // 5. Resolve destination path
+        let destination = self.resolve_extraction_destination(path, output)?;
+
+        // Check path length boundary
+        if destination.to_string_lossy().len() > crate::security::path::DEFAULT_MAX_PATH_LENGTH {
+            return Err(crate::error::SecurityError::InvalidPath {
+                details: format!(
+                    "Destination path length {} exceeds limit {}",
+                    destination.to_string_lossy().len(),
+                    crate::security::path::DEFAULT_MAX_PATH_LENGTH
+                ),
+            }
+            .into());
+        }
+
+        // 6. Destination access & writability verification
+        match std::fs::metadata(&destination) {
+            Ok(dest_meta) => {
+                if !dest_meta.is_dir() {
+                    return Err(ArchiveError::OutputInvalid {
+                        path: destination.display().to_string(),
+                        reason: "Destination exists but is not a directory".to_string(),
+                    }
+                    .into());
+                }
+                if let Err(e) = crate::security::path::probe_directory_writable(&destination) {
+                    return Err(ArchiveError::permission_denied(
+                        "destination",
+                        destination.display().to_string(),
+                        crate::security::path::format_os_error(&e),
+                    )
+                    .into());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let ancestor = crate::security::path::find_nearest_existing_ancestor(&destination);
+                let ancestor_meta = match std::fs::metadata(&ancestor) {
+                    Ok(m) => m,
+                    Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                        return Err(ArchiveError::permission_denied(
+                            "destination",
+                            ancestor.display().to_string(),
+                            crate::security::path::format_os_error(&err),
+                        )
+                        .into());
+                    }
+                    #[cfg(unix)]
+                    Err(err) if err.raw_os_error() == Some(1) => {
+                        return Err(ArchiveError::permission_denied(
+                            "destination",
+                            ancestor.display().to_string(),
+                            crate::security::path::format_os_error(&err),
+                        )
+                        .into());
+                    }
+                    Err(err) => {
+                        return Err(ArchiveError::OutputInvalid {
+                            path: destination.display().to_string(),
+                            reason: format!(
+                                "Cannot access nearest existing ancestor '{}': {err}",
+                                ancestor.display()
+                            ),
+                        }
+                        .into());
+                    }
+                };
+
+                if !ancestor_meta.is_dir() {
+                    return Err(ArchiveError::OutputInvalid {
+                        path: destination.display().to_string(),
+                        reason: format!(
+                            "Nearest existing ancestor '{}' is not a directory",
+                            ancestor.display()
+                        ),
+                    }
+                    .into());
+                }
+
+                if let Err(probe_err) = crate::security::path::probe_directory_writable(&ancestor) {
+                    return Err(ArchiveError::permission_denied(
+                        "destination",
+                        destination.display().to_string(),
+                        crate::security::path::format_os_error(&probe_err),
+                    )
+                    .into());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(ArchiveError::permission_denied(
+                    "destination",
+                    destination.display().to_string(),
+                    crate::security::path::format_os_error(&e),
+                )
+                .into());
+            }
+            #[cfg(unix)]
+            Err(e) if e.raw_os_error() == Some(1) => {
+                return Err(ArchiveError::permission_denied(
+                    "destination",
+                    destination.display().to_string(),
+                    crate::security::path::format_os_error(&e),
+                )
+                .into());
+            }
+            Err(e) => {
+                return Err(ArchiveError::OutputInvalid {
+                    path: destination.display().to_string(),
+                    reason: e.to_string(),
+                }
+                .into());
+            }
+        }
+
+        Ok(ExtractionPreflight {
+            volume_set,
+            destination,
+        })
+    }
+
+    /// Securely extracts an archive to a specified or default destination.
+    pub fn extract_archive(
+        &self,
+        path: &Path,
+        output: Option<&Path>,
+        password: Option<&str>,
+    ) -> Result<ArchiveExtractResult> {
+        self.extract_archive_with_progress(path, output, password, None)
+    }
+
+    /// Securely extracts an archive with optional real-time progress streaming.
+    pub fn extract_archive_with_progress(
+        &self,
+        path: &Path,
+        output: Option<&Path>,
+        password: Option<&str>,
+        progress: Option<&mut dyn crate::archive::ProgressListener>,
+    ) -> Result<ArchiveExtractResult> {
+        let preflight = self.preflight_extract(path, output)?;
+        self.extract_with_preflight(&preflight, password, progress)
+    }
+
+    /// Extracts an archive using an already-validated preflight context.
+    pub fn extract_with_preflight(
+        &self,
+        preflight: &ExtractionPreflight,
+        password: Option<&str>,
+        mut progress: Option<&mut dyn crate::archive::ProgressListener>,
+    ) -> Result<ArchiveExtractResult> {
+        let volume_set = &preflight.volume_set;
+        let destination = &preflight.destination;
+
+        // 1. Verify engine binary integrity upfront before execution
+        let engine_path = resolve_bundled_engine()?;
+        crate::security::integrity::verify_bundled_engine_integrity(&engine_path)?;
+
+        // 2. Pre-extract security inspection:
         // List entries in the archive to detect path traversal, absolute paths, or unauthorized symlinks upfront
         if let Ok(entries) = self
             .backend
             .list_entries(&volume_set.primary_volume, password)
         {
-            for entry in entries {
+            let mut uncompressed_total = 0u64;
+            for entry in &entries {
+                uncompressed_total = uncompressed_total.saturating_add(entry.uncompressed_size);
                 self.security_context
                     .policy()
                     .validate_entry_path(&entry.path)?;
@@ -680,11 +890,17 @@ impl Application {
                     .into());
                 }
             }
+
+            if uncompressed_total > 0 {
+                if let Some(ref mut listener) = progress {
+                    listener.set_total_bytes(uncompressed_total);
+                }
+            }
         }
 
-        let mut guard = PartialExtractionGuard::new(&destination);
+        let mut guard = PartialExtractionGuard::new(destination);
 
-        // 4. Extract through bundled engine backend under OS-level confinement
+        // 3. Extract through bundled engine backend under OS-level confinement
         let scratch = ScratchWorkspace::new()?;
         let sandbox_policy = ProcessSandboxPolicy::new(engine_path, scratch.path().to_path_buf())
             .with_inputs(volume_set.volumes.clone())
@@ -694,7 +910,7 @@ impl Application {
 
         let mut result = match self.backend.extract_with_policy_and_progress(
             &volume_set.primary_volume,
-            &destination,
+            destination,
             password,
             &sandbox_policy,
             progress,
@@ -707,13 +923,13 @@ impl Application {
                 return Err(e.into());
             }
         };
-        result.archive_path = path.to_path_buf();
+        result.archive_path = volume_set.primary_volume.clone();
         result.format = volume_set.format;
 
         crate::platform::signals::check_interrupted()?;
 
-        // 5. Post-extraction safety verification: verify boundary containment, symlinks, hardlinks, device nodes
-        self.verify_extracted_destination(&destination, &mut result)?;
+        // 4. Post-extraction safety verification: verify boundary containment, symlinks, hardlinks, device nodes
+        self.verify_extracted_destination(destination, &mut result)?;
 
         // Extraction succeeded and passed all verification checks: disarm cleanup guard
         guard.disarm();

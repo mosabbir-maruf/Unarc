@@ -387,6 +387,21 @@ impl VolumeResolver {
                     path: selected_path.to_string_lossy().to_string(),
                 });
             }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(ArchiveError::permission_denied(
+                    "archive",
+                    selected_path.to_string_lossy(),
+                    crate::security::path::format_os_error(&e),
+                ));
+            }
+            #[cfg(unix)]
+            Err(e) if e.raw_os_error() == Some(1) => {
+                return Err(ArchiveError::permission_denied(
+                    "archive",
+                    selected_path.to_string_lossy(),
+                    crate::security::path::format_os_error(&e),
+                ));
+            }
             Err(e) => {
                 return Err(ArchiveError::InvalidVolume {
                     path: selected_path.display().to_string(),
@@ -709,9 +724,22 @@ impl VolumeResolver {
 
     /// Validates an individual volume file for existence, regular file status, and valid archive signature.
     fn validate_volume_file(path: &Path, policy: &SecurityPolicy) -> Result<(), ArchiveError> {
-        let meta = std::fs::symlink_metadata(path).map_err(|e| ArchiveError::InvalidVolume {
-            path: path.display().to_string(),
-            reason: format!("Cannot access volume metadata: {e}"),
+        let meta = std::fs::symlink_metadata(path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::PermissionDenied => ArchiveError::permission_denied(
+                "archive volume",
+                path.display().to_string(),
+                crate::security::path::format_os_error(&e),
+            ),
+            #[cfg(unix)]
+            _ if e.raw_os_error() == Some(1) => ArchiveError::permission_denied(
+                "archive volume",
+                path.display().to_string(),
+                crate::security::path::format_os_error(&e),
+            ),
+            _ => ArchiveError::InvalidVolume {
+                path: path.display().to_string(),
+                reason: format!("Cannot access volume metadata: {e}"),
+            },
         })?;
 
         if meta.file_type().is_symlink() && !policy.allow_symlinks {
@@ -730,9 +758,22 @@ impl VolumeResolver {
         }
 
         // Verify valid magic header bytes (first 8 bytes)
-        let mut f = File::open(path).map_err(|e| ArchiveError::InvalidVolume {
-            path: path.display().to_string(),
-            reason: format!("Failed to open volume: {e}"),
+        let mut f = File::open(path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::PermissionDenied => ArchiveError::permission_denied(
+                "archive volume",
+                path.display().to_string(),
+                crate::security::path::format_os_error(&e),
+            ),
+            #[cfg(unix)]
+            _ if e.raw_os_error() == Some(1) => ArchiveError::permission_denied(
+                "archive volume",
+                path.display().to_string(),
+                crate::security::path::format_os_error(&e),
+            ),
+            _ => ArchiveError::InvalidVolume {
+                path: path.display().to_string(),
+                reason: format!("Failed to open volume: {e}"),
+            },
         })?;
 
         let mut header = [0u8; 8];
@@ -769,9 +810,22 @@ impl VolumeResolver {
 
     /// Strictly non-recursive read of direct siblings in the parent directory.
     fn read_immediate_dir_entries(dir: &Path) -> Result<Vec<PathBuf>, ArchiveError> {
-        let entries = std::fs::read_dir(dir).map_err(|e| ArchiveError::BackendFailure {
-            backend: "filesystem".to_string(),
-            message: format!("Failed to read directory {}: {e}", dir.display()),
+        let entries = std::fs::read_dir(dir).map_err(|e| match e.kind() {
+            std::io::ErrorKind::PermissionDenied => ArchiveError::permission_denied(
+                "archive directory",
+                dir.display().to_string(),
+                crate::security::path::format_os_error(&e),
+            ),
+            #[cfg(unix)]
+            _ if e.raw_os_error() == Some(1) => ArchiveError::permission_denied(
+                "archive directory",
+                dir.display().to_string(),
+                crate::security::path::format_os_error(&e),
+            ),
+            _ => ArchiveError::BackendFailure {
+                backend: "filesystem".to_string(),
+                message: format!("Failed to read directory {}: {e}", dir.display()),
+            },
         })?;
 
         let mut paths = Vec::new();

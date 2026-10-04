@@ -482,18 +482,34 @@ pub fn error_hint(code: crate::error::ErrorCode) -> Option<&'static str> {
         InputNotFound => Some("Verify that the archive path exists and is spelled correctly."),
         InputNotFile => Some("Target path is a directory or special device, not an archive file."),
         UnsupportedFormat => Some("The archive format is unrecognized or unsupported."),
-        MissingVolume => Some("Ensure all multi-part volume files (.part1, .part2, .z01, etc.) are in the same folder."),
+        MissingVolume => Some(
+            "Ensure all multi-part volume files (.part1, .part2, .z01, etc.) are in the same folder.",
+        ),
         InvalidVolume => Some("A multi-part volume appears corrupt, mismatched, or truncated."),
         CorruptArchive => Some("The archive header or data failed verification."),
-        PasswordRequired => Some("Provide the archive password via the interactive terminal prompt."),
+        PasswordRequired => {
+            Some("Provide the archive password via the interactive terminal prompt.")
+        }
         InvalidPassword => Some("The provided password could not decrypt the archive."),
-        OutputInvalid => Some("Check that destination is a valid directory path and not an existing non-directory file."),
-        PathTraversal => Some("Refused extraction due to unsafe paths breakout (../) outside destination directory."),
-        UnsafeEntry => Some("Refused extraction of unsafe archive content (e.g. absolute symlink or device node)."),
-        SecurityPolicyViolation => Some("Operation violates active security policy boundaries (e.g. symlinks disallowed)."),
-        PermissionDenied => Some("Check filesystem permissions for read access to the archive and write access to destination."),
+        OutputInvalid => Some(
+            "Check that destination is a valid directory path and not an existing non-directory file.",
+        ),
+        PathTraversal => Some(
+            "Refused extraction due to unsafe paths breakout (../) outside destination directory.",
+        ),
+        UnsafeEntry => Some(
+            "Refused extraction of unsafe archive content (e.g. absolute symlink or device node).",
+        ),
+        SecurityPolicyViolation => {
+            Some("Operation violates active security policy boundaries (e.g. symlinks disallowed).")
+        }
+        PermissionDenied => Some(
+            "Check filesystem permissions for read access to the archive and write access to destination.",
+        ),
         ExtractionFailed => Some("Decompression aborted or failed during archive processing."),
-        EngineFailed => Some("Run 'unarc doctor' to verify engine binary integrity and platform diagnostics."),
+        EngineFailed => {
+            Some("Run 'unarc doctor' to verify engine binary integrity and platform diagnostics.")
+        }
         Interrupted => Some("Operation was cancelled by user signal."),
         CliError => Some("Run 'unarc --help' to see valid command syntax and options."),
     }

@@ -60,7 +60,7 @@ pub trait ArchiveBackend: Send + Sync {
 
     /// Inspects an archive to retrieve top-level metadata.
     fn inspect(&self, path: &Path, password: Option<&str>)
-        -> Result<ArchiveMetadata, ArchiveError>;
+    -> Result<ArchiveMetadata, ArchiveError>;
 
     /// Lists entries contained within the archive.
     fn list_entries(

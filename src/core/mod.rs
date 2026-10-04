@@ -5,6 +5,6 @@ pub mod update;
 
 pub use app::{AppInfo, Application, DiagnosticCheck, DoctorReport, EngineInfo};
 pub use update::{
-    DownloadTransport, MockDownloadTransport, SystemCurlTransport, UpdateApplyResult,
-    UpdateCheckResult, UpdateManager, DEFAULT_UPDATE_SOURCE,
+    DEFAULT_UPDATE_SOURCE, DownloadTransport, MockDownloadTransport, SystemCurlTransport,
+    UpdateApplyResult, UpdateCheckResult, UpdateManager,
 };

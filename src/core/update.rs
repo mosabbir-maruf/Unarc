@@ -2,7 +2,7 @@
 
 use crate::error::{ArchiveError, Result, SecurityError, UnarcError};
 use crate::security::integrity::{
-    compute_sha256, verify_executable_format, ReleaseManifest, ReleaseSignatureVerifier,
+    ReleaseManifest, ReleaseSignatureVerifier, compute_sha256, verify_executable_format,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

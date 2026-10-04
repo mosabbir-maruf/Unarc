@@ -9,7 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 use unarc::archive::bundled::PINNED_7ZIP_VERSION;
 use unarc::security::integrity::{
-    compute_sha256, hex_decode, ReleaseManifest, ReleaseSignatureVerifier,
+    ReleaseManifest, ReleaseSignatureVerifier, compute_sha256, hex_decode,
 };
 
 #[derive(Parser, Debug)]

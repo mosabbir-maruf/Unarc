@@ -51,8 +51,12 @@ impl SandboxStatus {
     #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Enforced => "macOS Seatbelt kernel sandbox actively enforced (network denied, paths restricted to resolved volumes and destination)",
-            Self::Degraded => "Process group isolation, environment scrubbing, and containment enforced; kernel-level LSM sandbox not enforced",
+            Self::Enforced => {
+                "macOS Seatbelt kernel sandbox actively enforced (network denied, paths restricted to resolved volumes and destination)"
+            }
+            Self::Degraded => {
+                "Process group isolation, environment scrubbing, and containment enforced; kernel-level LSM sandbox not enforced"
+            }
             Self::Unavailable => "Process sandbox confinement unavailable",
         }
     }
@@ -794,9 +798,11 @@ mod tests {
     fn test_sandbox_status_description() {
         let enforced = SandboxStatus::Enforced;
         assert_eq!(enforced.label(), "ENFORCED");
-        assert!(enforced
-            .description()
-            .contains("kernel sandbox actively enforced"));
+        assert!(
+            enforced
+                .description()
+                .contains("kernel sandbox actively enforced")
+        );
 
         let degraded = SandboxStatus::Degraded;
         assert_eq!(degraded.label(), "DEGRADED");
@@ -837,7 +843,8 @@ mod tests {
     #[test]
     fn test_environment_scrubbing() {
         // Set a sensitive test variable in the current process
-        std::env::set_var("_UNARC_TEST_SECRET", "super_secret_value_123");
+        // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+        unsafe { std::env::set_var("_UNARC_TEST_SECRET", "super_secret_value_123") };
 
         let scratch = ScratchWorkspace::new().unwrap();
         let policy =
@@ -856,6 +863,7 @@ mod tests {
             "Environment variable must be purged"
         );
 
-        std::env::remove_var("_UNARC_TEST_SECRET");
+        // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+        unsafe { std::env::remove_var("_UNARC_TEST_SECRET") };
     }
 }

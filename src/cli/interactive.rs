@@ -1,12 +1,12 @@
 //! Terminal-native interactive Terminal UI (TUI) and suggestion engine.
 
 use crate::archive::ArchiveFormat;
-use crate::core::app::AppInfo;
 use crate::core::Application;
+use crate::core::app::AppInfo;
 use crate::error::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use std::io::{stdin, stdout, IsTerminal, Write};
+use std::io::{IsTerminal, Write, stdin, stdout};
 use std::path::{Path, PathBuf};
 
 /// Clean ASCII wordmark with subtitle.

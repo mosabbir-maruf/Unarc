@@ -2,7 +2,7 @@
 
 use crate::archive::backend::{ArchiveBackend, ArchiveExtractResult, ArchiveTestResult};
 use crate::archive::bundled::{
-    resolve_bundled_engine, SevenZipBackend, PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION,
+    PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION, SevenZipBackend, resolve_bundled_engine,
 };
 use crate::archive::format::ArchiveFormat;
 use crate::archive::metadata::ArchiveMetadata;
@@ -361,27 +361,30 @@ impl Application {
         });
 
         // Probe 7: Subprocess Environment Secrets Isolation
-        std::env::set_var("_UNARC_DOCTOR_TEST_SECRET", "super_secret_value");
+        // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+        unsafe { std::env::set_var("_UNARC_DOCTOR_TEST_SECRET", "super_secret_value") };
         let env_isolation_passed = {
-            if let Ok(scratch) = ScratchWorkspace::new() {
-                let mut probe_cmd = std::process::Command::new("/bin/sh");
-                probe_cmd.args(["-c", "echo ${_UNARC_DOCTOR_TEST_SECRET:-PURGED}"]);
-                let policy = ProcessSandboxPolicy::new(
-                    PathBuf::from("/bin/sh"),
-                    scratch.path().to_path_buf(),
-                );
-                probe_cmd.env_clear();
-                probe_cmd.env("PATH", "/usr/bin:/bin:/usr/local/bin");
-                probe_cmd.env("TMPDIR", policy.scratch_dir.as_os_str());
-                match probe_cmd.output() {
-                    Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "PURGED",
-                    Err(_) => true,
+            match ScratchWorkspace::new() {
+                Ok(scratch) => {
+                    let mut probe_cmd = std::process::Command::new("/bin/sh");
+                    probe_cmd.args(["-c", "echo ${_UNARC_DOCTOR_TEST_SECRET:-PURGED}"]);
+                    let policy = ProcessSandboxPolicy::new(
+                        PathBuf::from("/bin/sh"),
+                        scratch.path().to_path_buf(),
+                    );
+                    probe_cmd.env_clear();
+                    probe_cmd.env("PATH", "/usr/bin:/bin:/usr/local/bin");
+                    probe_cmd.env("TMPDIR", policy.scratch_dir.as_os_str());
+                    match probe_cmd.output() {
+                        Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "PURGED",
+                        Err(_) => true,
+                    }
                 }
-            } else {
-                false
+                _ => false,
             }
         };
-        std::env::remove_var("_UNARC_DOCTOR_TEST_SECRET");
+        // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+        unsafe { std::env::remove_var("_UNARC_DOCTOR_TEST_SECRET") };
         checks.push(DiagnosticCheck {
             name: "Environment Secrets Hygiene".to_string(),
             passed: env_isolation_passed,

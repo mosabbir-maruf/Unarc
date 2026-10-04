@@ -8,8 +8,8 @@ pub mod volume;
 
 pub use backend::{ArchiveBackend, ArchiveExtractResult, ArchiveTestResult, ProgressListener};
 pub use bundled::{
-    resolve_bundled_engine, SevenZipBackend, EXPECTED_SHA256_LINUX_ARM64,
-    EXPECTED_SHA256_LINUX_X64, EXPECTED_SHA256_MACOS, PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION,
+    EXPECTED_SHA256_LINUX_ARM64, EXPECTED_SHA256_LINUX_X64, EXPECTED_SHA256_MACOS,
+    PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION, SevenZipBackend, resolve_bundled_engine,
 };
 pub use format::ArchiveFormat;
 pub use metadata::{ArchiveEntry, ArchiveMetadata};

@@ -1,8 +1,8 @@
 //! Security policy definition and enforcement.
 
 use super::path::{
-    sanitize_relative_path, verify_boundary_containment, DEFAULT_MAX_PATH_DEPTH,
-    DEFAULT_MAX_PATH_LENGTH,
+    DEFAULT_MAX_PATH_DEPTH, DEFAULT_MAX_PATH_LENGTH, sanitize_relative_path,
+    verify_boundary_containment,
 };
 use crate::error::SecurityError;
 use serde::{Deserialize, Serialize};
@@ -133,14 +133,18 @@ mod tests {
         let mut policy = SecurityPolicy::strict();
         policy.allow_symlinks = true;
 
-        assert!(policy
-            .validate_symlink_target(Path::new("target.txt"))
-            .is_ok());
+        assert!(
+            policy
+                .validate_symlink_target(Path::new("target.txt"))
+                .is_ok()
+        );
 
         // Still rejects absolute symlink
-        assert!(policy
-            .validate_symlink_target(Path::new("/etc/hosts"))
-            .is_err());
+        assert!(
+            policy
+                .validate_symlink_target(Path::new("/etc/hosts"))
+                .is_err()
+        );
     }
 
     #[test]

@@ -3,12 +3,12 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use unarc::archive::bundled::{
-    resolve_bundled_engine, SevenZipBackend, EXPECTED_SHA256_LINUX_ARM64,
-    EXPECTED_SHA256_LINUX_X64, EXPECTED_SHA256_MACOS, PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION,
+    EXPECTED_SHA256_LINUX_ARM64, EXPECTED_SHA256_LINUX_X64, EXPECTED_SHA256_MACOS,
+    PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION, SevenZipBackend, resolve_bundled_engine,
 };
 use unarc::cli::args::{Cli, Commands, ExtractArgs, TestArgs};
 use unarc::cli::interactive::{execute_interactive_command, filter_suggestions};
-use unarc::cli::{run_with_cli, run_with_cli_and_prompter, OutputFormatter, PasswordPrompter};
+use unarc::cli::{OutputFormatter, PasswordPrompter, run_with_cli, run_with_cli_and_prompter};
 use unarc::core::Application;
 use unarc::error::{ArchiveError, ErrorCode, UnarcError};
 use unarc::security::{
@@ -162,13 +162,15 @@ fn test_pinned_engine_metadata() {
 
 #[test]
 fn test_output_formatter_no_color_behavior() {
-    std::env::set_var("NO_COLOR", "1");
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::set_var("NO_COLOR", "1") };
     let formatter = OutputFormatter::new(false, false, false);
     // When NO_COLOR is set, color_enabled is false
     let app = Application::default();
     let info = app.app_info();
     formatter.print_info(&info);
-    std::env::remove_var("NO_COLOR");
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::remove_var("NO_COLOR") };
 }
 
 #[test]
@@ -1182,9 +1184,12 @@ fn test_adversarial_child_process_termination_on_drop() {
 
 #[test]
 fn test_adversarial_environment_secrets_purged() {
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", "AKIAIOSFODNN7EXAMPLE");
-    std::env::set_var("SSH_AUTH_SOCK", "/tmp/sensitive-ssh-agent.sock");
-    std::env::set_var("GITHUB_TOKEN", "ghp_SECRET_TOKEN_1234567890");
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::set_var("AWS_SECRET_ACCESS_KEY", "AKIAIOSFODNN7EXAMPLE") };
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::set_var("SSH_AUTH_SOCK", "/tmp/sensitive-ssh-agent.sock") };
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::set_var("GITHUB_TOKEN", "ghp_SECRET_TOKEN_1234567890") };
 
     let scratch = unarc::security::ScratchWorkspace::new().unwrap();
     let policy = unarc::security::ProcessSandboxPolicy::new(
@@ -1204,9 +1209,12 @@ fn test_adversarial_environment_secrets_purged() {
         "Subprocess must not inherit ambient host secrets: got {stdout}"
     );
 
-    std::env::remove_var("AWS_SECRET_ACCESS_KEY");
-    std::env::remove_var("SSH_AUTH_SOCK");
-    std::env::remove_var("GITHUB_TOKEN");
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::remove_var("AWS_SECRET_ACCESS_KEY") };
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::remove_var("GITHUB_TOKEN") };
 }
 
 #[test]
@@ -1707,9 +1715,11 @@ fn test_phase5_regression_encrypted_interactive_stdin_prompt_path() {
 
     let res = run_with_cli_and_prompter(cli, &prompter);
     assert!(res.is_ok());
-    assert!(prompter
-        .prompt_called
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        prompter
+            .prompt_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
     assert!(out_dir.join("p5_reg_secret.txt").exists());
 
     let _ = std::fs::remove_file(&sample_file);
@@ -1766,9 +1776,11 @@ fn test_phase5_regression_encrypted_non_tty_closed_stdin_immediate_failure() {
     // Must return PASSWORD_REQUIRED immediately without calling prompt
     let res = run_with_cli_and_prompter(cli, &prompter);
     assert!(res.is_err());
-    assert!(!prompter
-        .prompt_called
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        !prompter
+            .prompt_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
     let err = res.unwrap_err();
     assert_eq!(err.code(), ErrorCode::PasswordRequired);
     assert_eq!(err.exit_code(), 16);
@@ -1826,9 +1838,11 @@ fn test_phase5_regression_encrypted_invalid_password_returns_code_17() {
 
     let res = run_with_cli_and_prompter(cli, &prompter);
     assert!(res.is_err());
-    assert!(prompter
-        .prompt_called
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        prompter
+            .prompt_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
     let err = res.unwrap_err();
     assert_eq!(err.code(), ErrorCode::InvalidPassword);
     assert_eq!(err.exit_code(), 17);
@@ -1938,7 +1952,8 @@ fn test_password_policy_1_unarc_password_ignored_closed_stdin_exit_16() {
     assert!(status.success());
 
     // Set UNARC_PASSWORD to the correct password in environment
-    std::env::set_var("UNARC_PASSWORD", "ActualSecret123");
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::set_var("UNARC_PASSWORD", "ActualSecret123") };
 
     // Non-interactive prompter (closed stdin / non-TTY)
     let prompter = TestMockPrompter {
@@ -1958,16 +1973,19 @@ fn test_password_policy_1_unarc_password_ignored_closed_stdin_exit_16() {
     };
 
     let res = run_with_cli_and_prompter(cli, &prompter);
-    std::env::remove_var("UNARC_PASSWORD");
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::remove_var("UNARC_PASSWORD") };
 
     assert!(res.is_err());
     let err = res.unwrap_err();
     // Must fail with PASSWORD_REQUIRED (exit 16), proving UNARC_PASSWORD was NOT used
     assert_eq!(err.code(), ErrorCode::PasswordRequired);
     assert_eq!(err.exit_code(), 16);
-    assert!(!prompter
-        .prompt_called
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        !prompter
+            .prompt_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
 
     let _ = std::fs::remove_file(&sample);
     let _ = std::fs::remove_file(&enc_archive);
@@ -2005,7 +2023,8 @@ fn test_password_policy_2_unarc_password_wrong_closed_stdin_exit_16_not_17() {
     assert!(status.success());
 
     // Set UNARC_PASSWORD to a WRONG password in environment
-    std::env::set_var("UNARC_PASSWORD", "WrongPasswordEnv");
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::set_var("UNARC_PASSWORD", "WrongPasswordEnv") };
 
     // Non-interactive prompter (closed stdin / non-TTY)
     let prompter = TestMockPrompter {
@@ -2025,7 +2044,8 @@ fn test_password_policy_2_unarc_password_wrong_closed_stdin_exit_16_not_17() {
     };
 
     let res = run_with_cli_and_prompter(cli, &prompter);
-    std::env::remove_var("UNARC_PASSWORD");
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::remove_var("UNARC_PASSWORD") };
 
     assert!(res.is_err());
     let err = res.unwrap_err();
@@ -2088,9 +2108,11 @@ fn test_password_policy_3_correct_password_via_stdin_prompt_exit_0() {
 
     let res = run_with_cli_and_prompter(cli, &prompter);
     assert!(res.is_ok());
-    assert!(prompter
-        .prompt_called
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        prompter
+            .prompt_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
     assert_eq!(
         std::fs::read(out_dir.join("policy3_sample.txt")).unwrap(),
         b"policy 3 verified payload"
@@ -2153,9 +2175,11 @@ fn test_password_policy_4_wrong_password_via_stdin_prompt_exit_17() {
     let err = res.unwrap_err();
     assert_eq!(err.code(), ErrorCode::InvalidPassword);
     assert_eq!(err.exit_code(), 17);
-    assert!(prompter
-        .prompt_called
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        prompter
+            .prompt_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
 
     let _ = std::fs::remove_file(&sample);
     let _ = std::fs::remove_file(&enc_archive);
@@ -2317,10 +2341,13 @@ fn test_phase6_engine_tamper_detection() {
     std::fs::write(&tampered_binary, b"tampered 7zz engine executable content").unwrap();
 
     let old_env = std::env::var("UNARC_BUNDLED_7ZZ").ok();
-    std::env::set_var(
-        "UNARC_BUNDLED_7ZZ",
-        tampered_binary.to_string_lossy().as_ref(),
-    );
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe {
+        std::env::set_var(
+            "UNARC_BUNDLED_7ZZ",
+            tampered_binary.to_string_lossy().as_ref(),
+        )
+    };
 
     let app = Application::default();
     let verify_res = app.verify_engine_integrity();
@@ -2352,8 +2379,10 @@ fn test_phase6_engine_tamper_detection() {
 
     // Restore environment
     match old_env {
-        Some(val) => std::env::set_var("UNARC_BUNDLED_7ZZ", val),
-        None => std::env::remove_var("UNARC_BUNDLED_7ZZ"),
+        // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+        Some(val) => unsafe { std::env::set_var("UNARC_BUNDLED_7ZZ", val) },
+        // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+        None => unsafe { std::env::remove_var("UNARC_BUNDLED_7ZZ") },
     }
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
@@ -2750,10 +2779,12 @@ fn test_phase6_update_path_safety_symlink_rejection_and_staging() {
     assert_eq!(content, b"real_unarc_binary");
 
     // 3. Confirm symlink itself is intact
-    assert!(std::fs::symlink_metadata(&symlink_bin)
-        .unwrap()
-        .file_type()
-        .is_symlink());
+    assert!(
+        std::fs::symlink_metadata(&symlink_bin)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
@@ -2841,10 +2872,12 @@ fn test_phase8_external_resolution_precedence() {
     let fake_7zz = temp_dir.join("7zz");
     std::fs::write(&fake_7zz, b"fake_external_binary").unwrap();
 
-    std::env::set_var("UNARC_BUNDLED_7ZZ", fake_7zz.to_string_lossy().as_ref());
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::set_var("UNARC_BUNDLED_7ZZ", fake_7zz.to_string_lossy().as_ref()) };
     let resolved = unarc::archive::bundled::resolve_bundled_engine().unwrap();
     assert_eq!(resolved, fake_7zz);
 
-    std::env::remove_var("UNARC_BUNDLED_7ZZ");
+    // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+    unsafe { std::env::remove_var("UNARC_BUNDLED_7ZZ") };
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

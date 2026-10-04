@@ -93,12 +93,7 @@ impl ProgressBar {
         if self.color_enabled {
             print!(
                 "\r\x1b[2K\x1b[1;36m{}:\x1b[0m [\x1b[36m{}\x1b[90m{}\x1b[0m] \x1b[1m{:>3}%\x1b[0m \x1b[90m{}\x1b[0m\x1b[2m{}\x1b[0m",
-                self.operation,
-                filled_bar,
-                unfilled_bar,
-                pct,
-                time_str,
-                file_part
+                self.operation, filled_bar, unfilled_bar, pct, time_str, file_part
             );
         } else {
             print!(
@@ -150,7 +145,7 @@ pub fn sanitize_terminal_text(input: &str) -> String {
                 Some(&'[') => {
                     // CSI sequence: ESC [ [params: 0x30-0x3F]* [intermediate: 0x20-0x2F]* [final: 0x40-0x7E]
                     chars.next(); // consume '['
-                                  // Consume parameter characters ('0'..='?')
+                    // Consume parameter characters ('0'..='?')
                     while let Some(&p) = chars.peek() {
                         if ('0'..='?').contains(&p) {
                             chars.next();

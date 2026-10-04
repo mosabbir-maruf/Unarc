@@ -1015,12 +1015,14 @@ mod tests {
         let fake_7zz = temp_dir.join("fake_7zz");
         let _ = std::fs::write(&fake_7zz, b"binary");
 
-        std::env::set_var("UNARC_BUNDLED_7ZZ", fake_7zz.to_string_lossy().as_ref());
+        // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+        unsafe { std::env::set_var("UNARC_BUNDLED_7ZZ", fake_7zz.to_string_lossy().as_ref()) };
         let res = resolve_bundled_engine();
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), fake_7zz);
 
-        std::env::remove_var("UNARC_BUNDLED_7ZZ");
+        // SAFETY: Environment variable access scoped to single-threaded test/diagnostic context.
+        unsafe { std::env::remove_var("UNARC_BUNDLED_7ZZ") };
         let _ = std::fs::remove_file(fake_7zz);
     }
 

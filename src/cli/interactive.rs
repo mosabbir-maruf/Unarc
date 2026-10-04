@@ -1258,6 +1258,7 @@ fn run_test_in_tui_layout(
         &archive_path,
         &crate::cli::TerminalPasswordPrompter,
         show_progress,
+        layout.left_margin,
     )?;
 
     let status_badge = if res.passed {
@@ -1348,6 +1349,7 @@ fn run_extract_in_tui_layout(
         dest_opt,
         &crate::cli::TerminalPasswordPrompter,
         show_progress,
+        layout.left_margin,
     )?;
 
     let status_badge = if layout.color_enabled {
@@ -2112,6 +2114,7 @@ fn run_test_interactive(
         &archive_path,
         &crate::cli::TerminalPasswordPrompter,
         show_progress,
+        0,
     )?;
     formatter.print_test_result(&res);
     Ok(())
@@ -2174,6 +2177,7 @@ fn run_extract_interactive(
         dest_opt,
         &crate::cli::TerminalPasswordPrompter,
         show_progress,
+        0,
     )?;
     formatter.print_extract_result(&res);
     Ok(())

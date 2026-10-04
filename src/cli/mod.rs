@@ -52,6 +52,7 @@ pub fn run_test_with_prompt<P: PasswordPrompter>(
     archive: &Path,
     prompter: &P,
     show_progress: bool,
+    left_margin: usize,
 ) -> Result<ArchiveTestResult> {
     let archive_bytes = std::fs::metadata(archive)
         .ok()
@@ -59,7 +60,7 @@ pub fn run_test_with_prompt<P: PasswordPrompter>(
         .unwrap_or(0);
     let run_with_bar = |pwd: Option<&str>| -> Result<ArchiveTestResult> {
         if show_progress {
-            let mut bar = crate::cli::progress::ProgressBar::new("Testing");
+            let mut bar = crate::cli::progress::ProgressBar::new("Testing", left_margin);
             if archive_bytes > 0 {
                 bar.set_total_bytes(archive_bytes);
             }
@@ -93,6 +94,7 @@ pub fn run_extract_with_prompt<P: PasswordPrompter>(
     output: Option<&Path>,
     prompter: &P,
     show_progress: bool,
+    left_margin: usize,
 ) -> Result<ArchiveExtractResult> {
     // Centralized preflight validation executes upfront before creating progress UI or spawning engine
     let preflight = app.preflight_extract(archive, output)?;
@@ -105,7 +107,7 @@ pub fn run_extract_with_prompt<P: PasswordPrompter>(
 
     let run_with_bar = |pwd: Option<&str>| -> Result<ArchiveExtractResult> {
         if show_progress {
-            let mut bar = crate::cli::progress::ProgressBar::new("Extracting");
+            let mut bar = crate::cli::progress::ProgressBar::new("Extracting", left_margin);
             if archive_bytes > 0 {
                 bar.set_total_bytes(archive_bytes);
             }
@@ -167,13 +169,14 @@ pub fn run_with_cli_and_prompter<P: PasswordPrompter>(cli: Cli, prompter: &P) ->
         }
         Some(Commands::Test(args)) => {
             let show_progress = formatter.should_show_progress();
-            let res = match run_test_with_prompt(&app, &args.archive, prompter, show_progress) {
-                Ok(r) => r,
-                Err(e) => {
-                    formatter.print_error(&e);
-                    return Err(e);
-                }
-            };
+            let res =
+                match run_test_with_prompt(&app, &args.archive, prompter, show_progress, 0) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        formatter.print_error(&e);
+                        return Err(e);
+                    }
+                };
             formatter.print_test_result(&res);
             Ok(())
         }
@@ -185,6 +188,7 @@ pub fn run_with_cli_and_prompter<P: PasswordPrompter>(cli: Cli, prompter: &P) ->
                 args.output.as_deref(),
                 prompter,
                 show_progress,
+                0,
             ) {
                 Ok(r) => r,
                 Err(e) => {

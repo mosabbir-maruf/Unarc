@@ -169,12 +169,13 @@ pub struct ProgressBar {
     color_enabled: bool,
     active: bool,
     rendered_lines: usize,
+    left_margin: usize,
 }
 
 impl ProgressBar {
-    /// Creates a new progress bar for the given operation label ("Extracting" or "Testing").
+    /// Creates a new progress bar for the given operation label with left margin indentation.
     #[must_use]
-    pub fn new(operation: &'static str) -> Self {
+    pub fn new(operation: &'static str, left_margin: usize) -> Self {
         let no_color = std::env::var_os("NO_COLOR").is_some();
         let now = Instant::now();
         let mut bar = Self {
@@ -188,6 +189,7 @@ impl ProgressBar {
             color_enabled: !no_color,
             active: true,
             rendered_lines: 0,
+            left_margin,
         };
         bar.render(0);
         bar
@@ -257,7 +259,9 @@ impl ProgressBar {
             .unwrap_or(80)
             .max(30);
 
-        let bar_width = if term_width < 50 { 12 } else { 20 };
+        let avail_width = term_width.saturating_sub(self.left_margin).max(20);
+
+        let bar_width = if avail_width < 50 { 12 } else { 20 };
         let filled = (pct as usize * bar_width) / 100;
         let unfilled = bar_width.saturating_sub(filled);
 
@@ -269,7 +273,7 @@ impl ProgressBar {
         let prefix_plain_len = self.operation.len() + 2 + 1 + bar_width + 1 + 5;
 
         let file_part = if let Some(ref f) = self.current_file {
-            let avail = term_width.saturating_sub(prefix_plain_len + 4);
+            let avail = avail_width.saturating_sub(prefix_plain_len + 4);
             if avail >= 8 {
                 let truncated = truncate_filename(f, avail);
                 format!(" ({truncated})")
@@ -318,7 +322,7 @@ impl ProgressBar {
             }
         });
 
-        let line2_styled = self.render_stats_line(term_width, bytes_processed, speed, eta_secs);
+        let line2_styled = self.render_stats_line(avail_width, bytes_processed, speed, eta_secs);
 
         let mut out = std::io::stdout();
         match self.rendered_lines {
@@ -331,10 +335,20 @@ impl ProgressBar {
             }
         }
 
-        let _ = write!(out, "\x1b[2K{line1_styled}");
+        let _ = write!(
+            out,
+            "\x1b[2K{:width$}{line1_styled}",
+            "",
+            width = self.left_margin
+        );
 
         if let Some(ref l2) = line2_styled {
-            let _ = write!(out, "\n\x1b[2K{l2}");
+            let _ = write!(
+                out,
+                "\n\x1b[2K{:width$}{l2}",
+                "",
+                width = self.left_margin
+            );
             self.rendered_lines = 2;
         } else {
             self.rendered_lines = 1;
@@ -553,7 +567,7 @@ mod tests {
 
     #[test]
     fn test_progress_bar_creation_and_update() {
-        let mut bar = ProgressBar::new("Extracting");
+        let mut bar = ProgressBar::new("Extracting", 0);
         assert!(bar.active);
         bar.update(25, Some("file1.bin"));
         bar.update(50, Some("file2.bin"));
@@ -636,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_unicode_filename_rendering_without_panic() {
-        let mut bar = ProgressBar::new("Testing");
+        let mut bar = ProgressBar::new("Testing", 0);
         // Test diverse Unicode scripts, emoji, and control injections across multiple updates
         let test_cases = [
             "é",
@@ -722,7 +736,7 @@ mod tests {
     #[test]
     fn test_progress_bar_with_total_bytes_and_stats() {
         let total = (50.2 * 1024.0 * 1024.0 * 1024.0) as u64;
-        let mut bar = ProgressBar::new("Extracting").with_total_bytes(total);
+        let mut bar = ProgressBar::new("Extracting", 0).with_total_bytes(total);
         assert_eq!(bar.total_bytes, Some(total));
 
         bar.update(25, Some("data1.bin"));
@@ -737,7 +751,7 @@ mod tests {
     fn test_render_stats_line_responsive_pruning() {
         let total = (50.2 * 1024.0 * 1024.0 * 1024.0) as u64;
         let processed = (48.7 * 1024.0 * 1024.0 * 1024.0) as u64;
-        let bar = ProgressBar::new("Extracting").with_total_bytes(total);
+        let bar = ProgressBar::new("Extracting", 0).with_total_bytes(total);
 
         // At 100 columns: all 3 items fit
         let line_wide =
@@ -755,5 +769,14 @@ mod tests {
         let text_narrow = line_narrow.unwrap();
         assert!(text_narrow.contains("48.7 GB / 50.2 GB"));
         assert!(!text_narrow.contains("ETA 1s"));
+    }
+
+    #[test]
+    fn test_progress_bar_with_left_margin() {
+        let mut bar = ProgressBar::new("Extracting", 12);
+        assert_eq!(bar.left_margin, 12);
+        let bar2 = ProgressBar::new("Testing", 8);
+        assert_eq!(bar2.left_margin, 8);
+        bar.finish();
     }
 }

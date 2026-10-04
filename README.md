@@ -8,15 +8,19 @@ Targeting **macOS Apple Silicon** (`aarch64-apple-darwin`), **Linux** (`x86_64`,
 
 ## Quick Start
 
-| Audience | Use Case | Distribution Path | Toolchain Required |
+Unarc provides 3 primary ways to install and run. Choose the path that matches your environment:
+
+| Method | Target Platform | Prerequisites | Best For |
 |---|---|---|---|
-| **Native End User** *(Recommended)* | Direct local installation on macOS or Linux | [**Native Installation**](#native-installation-recommended) | **None** (Single self-contained executable) |
-| **Docker User** | Isolated execution without host installation | [**Docker (GHCR)**](#docker-ghcr) | **Docker only** |
-| **Developer / Contributor** | Build from source or contribute | [**Developer / Build From Source**](#developer--build-from-source) | **Rust & Cargo** |
+| [**1. Native — Manual Installation**](#1-native--manual-installation) | macOS Apple Silicon, Linux (`x86_64`, `aarch64`) | None | Direct binary download & custom PATH setup |
+| [**2. Native — Scripted Installation**](#2-native--scripted-installation) | macOS Apple Silicon, Linux (`x86_64`, `aarch64`) | `curl`, `shasum` | Fast one-step terminal installation & verification |
+| [**3. Docker**](#3-docker) | Any OS with Docker runtime | Docker | Isolated, zero-install container execution |
+
+After installing, see [**First Run**](#first-run) for verification, macOS Gatekeeper handling, and getting started.
 
 ---
 
-## Native Installation (Recommended)
+## 1. Native — Manual Installation
 
 Unarc is distributed as a single, self-contained native executable embedding the authentic, pinned `7zz v26.03` engine. No Rust, Cargo, 7-Zip, Homebrew, or runtime dependencies are required.
 
@@ -25,14 +29,14 @@ Unarc is distributed as a single, self-contained native executable embedding the
 - **Linux x86_64**: `linux-x86_64` (`x86_64-unknown-linux-gnu`)
 - **Linux ARM64**: `linux-aarch64` (`aarch64-unknown-linux-gnu`)
 
-### Manual Download & PATH Setup
+### Download & PATH Setup
 
 1. Download the standalone executable matching the `unarc-<version>-<platform>` pattern from [GitHub Releases](https://github.com/mosabbir-maruf/Unarc/releases/latest):
    - `unarc-0.2.2-macos-arm64` (macOS Apple Silicon)
    - `unarc-0.2.2-linux-x86_64` (Linux x86_64)
    - `unarc-0.2.2-linux-aarch64` (Linux ARM64)
 
-2. Run directly or install into your `PATH`:
+2. Make executable and run directly, or install into your `PATH`:
    ```bash
    # Make executable and run directly:
    chmod +x ./unarc-0.2.2-macos-arm64
@@ -44,11 +48,16 @@ Unarc is distributed as a single, self-contained native executable embedding the
    unarc
    ```
 
-*(Note: `.tar.gz` bundles containing documentation and licenses are also provided on the releases page for package maintainers.)*
+> [!TIP]
+> Ensure `~/.local/bin` is in your `PATH` (e.g. `export PATH="$HOME/.local/bin:$PATH"` in `~/.zshrc` or `~/.bashrc`).
 
-### Scripted Installation (Terminal)
+*(Note: Package maintainers can also find `.tar.gz` bundles containing documentation and licenses on the releases page. For verification and macOS Gatekeeper guidance, proceed to [First Run](#first-run).)*
 
-Download, verify the SHA-256 digest, and install in a single workflow:
+---
+
+## 2. Native — Scripted Installation
+
+Download, verify the SHA-256 digest, install into `~/.local/bin`, and verify in a single Terminal workflow:
 
 ```bash
 PLATFORM="macos-arm64" # Options: macos-arm64, linux-x86_64, linux-aarch64
@@ -74,6 +83,59 @@ unarc doctor
 
 > [!TIP]
 > Ensure `~/.local/bin` is in your `PATH` (e.g. `export PATH="$HOME/.local/bin:$PATH"` in `~/.zshrc` or `~/.bashrc`).
+
+---
+
+## 3. Docker
+
+Published on GitHub Container Registry as an ultra-minimal distroless container (`ghcr.io/mosabbir-maruf/unarc:latest`).
+
+### Interactive Mode (Default)
+Mounting `$PWD` to `/work` allows working with files in your current directory:
+```bash
+docker run -it --rm -v "$PWD:/work" ghcr.io/mosabbir-maruf/unarc:latest
+```
+
+### Direct CLI Subcommands
+```bash
+# Test archive integrity
+docker run --rm -v "$PWD:/work" ghcr.io/mosabbir-maruf/unarc:latest test archive.zip
+
+# Extract archive
+docker run --rm -v "$PWD:/work" ghcr.io/mosabbir-maruf/unarc:latest extract archive.zip --output out
+
+# System and engine diagnostics
+docker run --rm ghcr.io/mosabbir-maruf/unarc:latest doctor
+```
+
+### Hardened Maximum-Security Mode
+For automated CI/CD pipelines or untrusted multi-tenant archives:
+```bash
+docker run --rm --network none --read-only --cap-drop ALL \
+  -v "$PWD/archive.zip:/input/archive.zip:ro" \
+  -v "$PWD/output:/output:rw" \
+  ghcr.io/mosabbir-maruf/unarc:latest \
+  extract /input/archive.zip --output /output
+```
+- `--network none`: Disables container network stack at the kernel level.
+- `--read-only`: Enforces read-only root filesystem.
+- `--cap-drop ALL`: Drops all Linux kernel capabilities.
+- `:ro` and `:rw` volume boundaries: Confines archive read to `:ro` and output writes exclusively to `:rw`.
+
+---
+
+## First Run
+
+Follow this onboarding runbook after installing Unarc.
+
+### Verify Installation
+
+Confirm that Unarc is installed and passes diagnostics:
+
+```bash
+unarc version
+unarc doctor
+```
 
 ### macOS Gatekeeper — First Run
 
@@ -126,51 +188,25 @@ com.apple.quarantine: 0083;...;Unarc;
 
 If `com.apple.quarantine` is present, the quarantine attribute has been restored.
 
----
+### Start Using Unarc
 
-## Uninstall
+Launch Unarc without arguments to enter interactive mode:
 
-Because Unarc is a self-contained standalone executable with no background services or system hooks:
+```bash
+unarc
+```
 
-- **For a PATH installation**:
-  ```bash
-  rm ~/.local/bin/unarc
-  command -v unarc || echo "Unarc removed"
-  ```
-- **For a directly downloaded standalone binary**:
-  Simply delete the downloaded binary file (e.g. `rm ./unarc-0.2.2-macos-arm64`).
+Or extract an archive directly:
 
----
-
-## Privacy & Local Storage
-
-Unarc operates with a strict zero-telemetry, zero-persistence model:
-- **No Background Services**: Never installs daemons, helpers, or background watchers.
-- **No Telemetry**: Collects zero analytics, metrics, or usage tracking.
-- **No Persistent Credentials**: Never saves passwords to disk, caches, keychain, configuration files, or logs.
-- **Air-Gapped & Offline**: Operates completely self-contained without cloud or backend dependencies.
-- **Zero Runtime Downloads**: Never fetches binaries or dependencies over the network at runtime.
-- **Ephemeral Operation Data**: Cleans temporary operation data (such as isolated sandbox staging workspaces) upon operation completion.
+```bash
+unarc extract archive.zip --output ./out
+```
 
 ---
 
-## Usage
+## Basic Usage
 
-### Direct CLI Subcommands
-
-| Subcommand | Description | Example |
-|---|---|---|
-| `extract <ARCHIVE>` | Securely extracts archive with path traversal and containment verification. | `unarc extract archive.zip --output ./out` |
-| `test <ARCHIVE>` | Tests archive integrity without writing extracted files to disk. | `unarc test archive.7z` |
-| `info` | Displays platform architecture, bundled engine version, and active security policy. | `unarc info` |
-| `doctor` | Runs end-to-end diagnostics, engine integrity checks, and sandbox boundary probes. | `unarc doctor` |
-| `update` | Checks for or applies cryptographically signed self-updates (native binaries only). | `unarc update --check` |
-| `version` | Displays the current Unarc version string. | `unarc version` |
-
-**Global Flags**:
-- `--json`: Formats output as structured JSON.
-- `-v, --verbose`: Increases output verbosity.
-- `-q, --quiet`: Suppresses non-essential terminal output.
+Unarc provides a streamlined progression: **Install → Verify → First Run → Use**.
 
 ### Interactive Mode (TUI)
 
@@ -192,47 +228,29 @@ unarc ›
 - **Keyboard Navigation**: Arrow keys (`↑`/`↓`) navigate suggestions, `Tab` autocompletes, and `Enter` executes.
 - **Drag-and-Drop**: Dragging an archive file into the terminal automatically detects the path and prompts for extraction or testing.
 
----
+### Direct CLI Subcommands
 
-## Docker (GHCR)
+| Subcommand | Description | Example |
+|---|---|---|
+| `extract <ARCHIVE>` | Securely extracts archive with path traversal and containment verification. | `unarc extract archive.zip --output ./out` |
+| `test <ARCHIVE>` | Tests archive integrity without writing extracted files to disk. | `unarc test archive.7z` |
+| `info` | Displays platform architecture, bundled engine version, and active security policy. | `unarc info` |
+| `doctor` | Runs end-to-end diagnostics, engine integrity checks, and sandbox boundary probes. | `unarc doctor` |
+| `update` | Checks for or applies cryptographically signed self-updates (native binaries only). | `unarc update --check` |
+| `version` | Displays the current Unarc version string. | `unarc version` |
 
-Published on GitHub Container Registry as an ultra-minimal distroless container (`ghcr.io/mosabbir-maruf/unarc:latest`).
-
-### 1. Interactive Mode (Default)
-Mounting `$PWD` to `/work` allows working with files in your current directory:
-```bash
-docker run -it --rm -v "$PWD:/work" ghcr.io/mosabbir-maruf/unarc:latest
-```
-
-### 2. Direct CLI Subcommands
-```bash
-# Test archive integrity
-docker run --rm -v "$PWD:/work" ghcr.io/mosabbir-maruf/unarc:latest test archive.zip
-
-# Extract archive
-docker run --rm -v "$PWD:/work" ghcr.io/mosabbir-maruf/unarc:latest extract archive.zip --output out
-
-# System and engine diagnostics
-docker run --rm ghcr.io/mosabbir-maruf/unarc:latest doctor
-```
-
-### 3. Hardened Maximum-Security Mode
-For automated CI/CD pipelines or untrusted multi-tenant archives:
-```bash
-docker run --rm --network none --read-only --cap-drop ALL \
-  -v "$PWD/archive.zip:/input/archive.zip:ro" \
-  -v "$PWD/output:/output:rw" \
-  ghcr.io/mosabbir-maruf/unarc:latest \
-  extract /input/archive.zip --output /output
-```
-- `--network none`: Disables container network stack at the kernel level.
-- `--read-only`: Enforces read-only root filesystem.
-- `--cap-drop ALL`: Drops all Linux kernel capabilities.
-- `:ro` and `:rw` volume boundaries: Confines archive read to `:ro` and output writes exclusively to `:rw`.
+**Global Flags**:
+- `--json`: Formats output as structured JSON.
+- `-v, --verbose`: Increases output verbosity.
+- `-q, --quiet`: Suppresses non-essential terminal output.
 
 ---
 
-## Security Architecture
+## Advanced / Reference
+
+Authoritative technical documentation, security policies, format capabilities, exit codes, and operational reference.
+
+### Security Architecture
 
 Unarc enforces a multi-layered zero-trust security model:
 
@@ -246,9 +264,7 @@ Unarc enforces a multi-layered zero-trust security model:
   - *Docker*: Runs strictly as unprivileged user `65532:65532` in a distroless image containing zero shells or compilers.
 - **Cryptographic Trust Anchor**: Official updates verify Ed25519 signatures against an embedded trust anchor public key (`90cd97dbf43425cb694d386cb89f2e04fa252fafa6bffddddfc2f3fc962a94ee`) with atomic replacement via `rename(2)` and automatic rollback protection.
 
----
-
-## Password-Protected Archives
+### Password-Protected Archives
 
 Unarc implements an ephemeral, zero-leakage password handling policy:
 
@@ -261,9 +277,7 @@ Unarc implements an ephemeral, zero-leakage password handling policy:
   - Incorrect password: fails with exit code `17` (`INVALID_PASSWORD`).
   - Correct password: exits with code `0` (`SUCCESS`).
 
----
-
-## Supported Formats
+### Supported Formats
 
 | Format | Extensions | Capabilities |
 |---|---|---|
@@ -273,9 +287,7 @@ Unarc implements an ephemeral, zero-leakage password handling policy:
 | **Compressed TAR** | `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz2`, `.tar.xz`, `.txz` | Gzip, Bzip2, and XZ compression |
 | **RAR** | `.rar` | RAR 4.x legacy and RAR 5.x, including multipart volumes (`.part1.rar`, `.r00`) |
 
----
-
-## Exit Codes
+### Exit Codes
 
 Unarc returns deterministic exit codes for scripting and automation:
 
@@ -300,9 +312,7 @@ Unarc returns deterministic exit codes for scripting and automation:
 | `41` | `ENGINE_FAILED` | Internal bundled archive engine failed to execute |
 | `130` | `INTERRUPTED` | Execution interrupted by SIGINT / SIGTERM signal |
 
----
-
-## Developer / Build From Source
+### Developer / Build From Source
 
 Building from source requires the Rust toolchain (Rust 1.85.0+):
 
@@ -313,7 +323,7 @@ cd Unarc
 cargo run --release
 ```
 
-### Developer Workflow Commands
+#### Developer Workflow Commands
 
 ```bash
 # Full automated verification suite (fmt, clippy, tests, release build)
@@ -333,36 +343,54 @@ cargo run --release
 ./scripts/verify-security.sh
 ```
 
----
+### Troubleshooting
 
-## Troubleshooting
-
-### 1. macOS Gatekeeper Quarantine
+#### 1. macOS Gatekeeper Quarantine
 If macOS blocks execution with an alert stating developer cannot be verified, verify the SHA-256 digest and remove the quarantine attribute:
 ```bash
 xattr -d com.apple.quarantine ~/.local/bin/unarc
 ```
 See [macOS Gatekeeper — First Run](#macos-gatekeeper--first-run) for details.
 
-### 2. Docker Volume Permissions
+#### 2. Docker Volume Permissions
 If extraction inside Docker fails with `Permission denied` (`30`), ensure the mounted output directory is writable by unprivileged container user `65532:65532` (e.g. `chmod 777 ./out` or adjust directory ownership).
 
-### 3. Password-Protected Archive in Non-Interactive Mode
+#### 3. Password-Protected Archive in Non-Interactive Mode
 Non-interactive scripts extracting encrypted archives fail closed with exit code `16` (`PASSWORD_REQUIRED`). Run in an interactive terminal (`docker run -it ...` or native terminal) to supply the password.
 
-### 4. Missing or Corrupt Multipart Volumes
+#### 4. Missing or Corrupt Multipart Volumes
 When extracting multipart volumes (`.part1.rar`, `.r00`), ensure all constituent volume files reside in the same folder. Missing volumes return exit code `13`; corrupt volumes return exit code `14`.
 
-### 5. Engine Resolution Priority
+#### 5. Engine Resolution Priority
 Unarc resolves its engine in strict order:
 1. `UNARC_BUNDLED_7ZZ` environment variable override.
 2. Adjacent `7zz` binary in the same directory.
 3. Container engine at `/opt/unarc/bin/7zz`.
 4. Embedded authentic `7zz` engine (automatically materialized to private temporary directory).
 
----
+### Uninstall
 
-## License & Third-Party Notices
+Because Unarc is a self-contained standalone executable with no background services or system hooks:
+
+- **For a PATH installation**:
+  ```bash
+  rm ~/.local/bin/unarc
+  command -v unarc || echo "Unarc removed"
+  ```
+- **For a directly downloaded standalone binary**:
+  Simply delete the downloaded binary file (e.g. `rm ./unarc-0.2.2-macos-arm64`).
+
+### Privacy & Local Storage
+
+Unarc operates with a strict zero-telemetry, zero-persistence model:
+- **No Background Services**: Never installs daemons, helpers, or background watchers.
+- **No Telemetry**: Collects zero analytics, metrics, or usage tracking.
+- **No Persistent Credentials**: Never saves passwords to disk, caches, keychain, configuration files, or logs.
+- **Air-Gapped & Offline**: Operates completely self-contained without cloud or backend dependencies.
+- **Zero Runtime Downloads**: Never fetches binaries or dependencies over the network at runtime.
+- **Ephemeral Operation Data**: Cleans temporary operation data (such as isolated sandbox staging workspaces) upon operation completion.
+
+### License & Third-Party Notices
 
 Unarc is open-source software licensed under the **[MIT License](LICENSE)**.
 

@@ -32,19 +32,19 @@ Unarc is distributed as a single, self-contained native executable embedding the
 ### Download & PATH Setup
 
 1. Download the standalone executable matching the `unarc-<version>-<platform>` pattern from [GitHub Releases](https://github.com/mosabbir-maruf/Unarc/releases/latest):
-   - `unarc-0.2.2-macos-arm64` (macOS Apple Silicon)
-   - `unarc-0.2.2-linux-x86_64` (Linux x86_64)
-   - `unarc-0.2.2-linux-aarch64` (Linux ARM64)
+   - `unarc-0.2.3-macos-arm64` (macOS Apple Silicon)
+   - `unarc-0.2.3-linux-x86_64` (Linux x86_64)
+   - `unarc-0.2.3-linux-aarch64` (Linux ARM64)
 
 2. Make executable and run directly, or install into your `PATH`:
    ```bash
    # Make executable and run directly:
-   chmod +x ./unarc-0.2.2-macos-arm64
-   ./unarc-0.2.2-macos-arm64
+   chmod +x ./unarc-0.2.3-macos-arm64
+   ./unarc-0.2.3-macos-arm64
 
    # Recommended PATH installation (run 'unarc' from anywhere):
    mkdir -p ~/.local/bin
-   mv ./unarc-0.2.2-macos-arm64 ~/.local/bin/unarc
+   mv ./unarc-0.2.3-macos-arm64 ~/.local/bin/unarc
    unarc
    ```
 
@@ -61,7 +61,7 @@ Download, verify the SHA-256 digest, install into `~/.local/bin`, and verify in 
 
 ```bash
 PLATFORM="macos-arm64" # Options: macos-arm64, linux-x86_64, linux-aarch64
-VERSION="0.2.2"
+VERSION="0.2.3"
 
 # 1. Download binary and SHA-256 checksum
 curl -sSLO "https://github.com/mosabbir-maruf/Unarc/releases/download/v${VERSION}/unarc-${VERSION}-${PLATFORM}"
@@ -138,7 +138,7 @@ unarc version
 
 Expected result:
 ```text
-unarc 0.2.2
+unarc 0.2.3
 ```
 
 Run doctor diagnostics to verify engine integrity and platform capabilities:
@@ -165,19 +165,19 @@ When downloading standalone binaries on macOS via browser or `curl`, Apple's Gat
 
 1. **Verify the official SHA-256 digest**:
    ```bash
-   shasum -a 256 -c unarc-0.2.2-macos-arm64.sha256
+   shasum -a 256 -c unarc-0.2.3-macos-arm64.sha256
    ```
 2. **Clear the quarantine attribute only from the verified Unarc binary**:
    ```bash
    # If running from download directory:
-   xattr -d com.apple.quarantine ./unarc-0.2.2-macos-arm64
+   xattr -d com.apple.quarantine ./unarc-0.2.3-macos-arm64
 
    # If installed to PATH:
    xattr -d com.apple.quarantine ~/.local/bin/unarc
    ```
 3. **Run the executable and verify it works**:
    ```bash
-   ./unarc-0.2.2-macos-arm64 version
+   ./unarc-0.2.3-macos-arm64 version
    # or
    unarc doctor
    ```
@@ -215,7 +215,7 @@ Re-apply the quarantine attribute:
 xattr -w com.apple.quarantine "0083;$(printf '%x' $(date +%s));Unarc;" ~/.local/bin/unarc
 
 # If running from download directory:
-xattr -w com.apple.quarantine "0083;$(printf '%x' $(date +%s));Unarc;" ./unarc-0.2.2-macos-arm64
+xattr -w com.apple.quarantine "0083;$(printf '%x' $(date +%s));Unarc;" ./unarc-0.2.3-macos-arm64
 ```
 
 Verify that the quarantine attribute is present:
@@ -280,7 +280,7 @@ Unarc provides a cryptographically authenticated self-update mechanism for nativ
 - **What It Downloads**: Downloads the standalone executable binary directly from GitHub Releases (e.g. `unarc-<version>-macos-arm64` on Apple Silicon). It does **not** download Docker container images or archive tarballs.
 - **Docker Updates**: Docker environments do not use `unarc update`; update by pulling the latest container image (`docker pull ghcr.io/mosabbir-maruf/unarc:latest`).
 - **Cryptographic Verification**: Before replacing any executable, Unarc fetches the release manifest, verifies its Ed25519 signature against the embedded official public key (`90cd97db...`), validates host architecture compatibility, verifies the downloaded binary's SHA-256 hash against the manifest, and validates Mach-O/ELF binary format headers.
-- **Atomic Replacement & Rollback**: Stages the verified binary alongside the running executable and applies it via atomic POSIX `rename(2)`. If network transfer, signature verification, checksum validation, or format checks fail, the temporary staging file is deleted immediately and the existing binary remains unchanged. Updates through symlinks are rejected for security.
+- **Atomic Replacement & Staging Cleanup**: Stages the verified binary alongside the running executable and applies it via atomic POSIX `rename(2)`. If network transfer, signature verification, checksum validation, or format checks fail, the temporary staging file is deleted immediately by an RAII cleanup guard and the existing binary remains untouched. Updates through symlinks are rejected for security.
 - **Execution Modes**:
   - `unarc update --check`: Checks for updates and reports availability without downloading or replacing the binary.
   - `unarc update`: Checks, downloads, verifies, and installs the update.
@@ -304,7 +304,7 @@ Unarc enforces a multi-layered zero-trust security model:
   - *macOS*: Apple Seatbelt (`sandbox-exec`) kernel confinement denies network access and restricts filesystem access strictly to input archive and output destination.
   - *Linux*: Process group isolation, purged ambient environment, `PR_SET_NO_NEW_PRIVS`, and `PR_SET_PDEATHSIG` (terminates engine if parent process exits).
   - *Docker*: Runs strictly as unprivileged user `65532:65532` in a distroless image containing zero shells or compilers.
-- **Cryptographic Trust Anchor**: Official updates verify Ed25519 signatures against an embedded trust anchor public key (`90cd97dbf43425cb694d386cb89f2e04fa252fafa6bffddddfc2f3fc962a94ee`) with atomic replacement via `rename(2)` and automatic rollback protection.
+- **Cryptographic Trust Anchor**: Official updates verify Ed25519 signatures against an embedded trust anchor public key (`90cd97dbf43425cb694d386cb89f2e04fa252fafa6bffddddfc2f3fc962a94ee`) with atomic replacement via `rename(2)` and safe staging cleanup.
 
 ### Password-Protected Archives
 
@@ -420,7 +420,7 @@ Because Unarc is a self-contained standalone executable with no background servi
   command -v unarc || echo "Unarc removed"
   ```
 - **For a directly downloaded standalone binary**:
-  Simply delete the downloaded binary file (e.g. `rm ./unarc-0.2.2-macos-arm64`).
+  Simply delete the downloaded binary file (e.g. `rm ./unarc-0.2.3-macos-arm64`).
 
 ### Privacy & Local Storage
 

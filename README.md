@@ -368,7 +368,14 @@ Building from source requires the Rust toolchain (Rust 1.85.0+):
 # Clone and build
 git clone https://github.com/mosabbir-maruf/Unarc.git
 cd Unarc
-cargo run --release
+cargo build --release
+
+# Run interactive TUI directly from built binary:
+./target/aarch64-apple-darwin/release/unarc  # (on macOS Apple Silicon)
+# or
+./target/release/unarc                      # (standard release path)
+# or
+make run                                    # (via Makefile shortcut)
 ```
 
 #### Developer Workflow & Makefile Commands
@@ -378,6 +385,9 @@ Unarc includes a `Makefile` that wraps the containerized dev toolchain (`./scrip
 ```bash
 # Automated verification suite (fmt-check, clippy, tests, release build)
 make check
+
+# Launch interactive UI / run binary
+make run          # Launch interactive TUI session (or: make run ARGS="--help")
 
 # Code formatting & linting
 make fmt          # Automatically format code

@@ -1,10 +1,11 @@
-.PHONY: all fmt fmt-check clippy test build release check docker-build clean help
+.PHONY: all fmt fmt-check clippy test build release run check docker-build clean help
 
 SHELL := /usr/bin/env bash
 
 help:
 	@echo "Unarc Development Automation Commands:"
 	@echo "  make check        - Run fmt-check, clippy, tests, and release build check"
+	@echo "  make run          - Run Unarc interactive TUI or binary directly"
 	@echo "  make fmt          - Automatically format code inside Docker"
 	@echo "  make fmt-check    - Check formatting without modifying files"
 	@echo "  make clippy       - Run Clippy lints inside Docker with warnings denied"
@@ -40,6 +41,17 @@ build:
 
 release:
 	./scripts/dev.sh release
+
+run:
+	@if [ -x "./target/aarch64-apple-darwin/release/unarc" ]; then \
+		./target/aarch64-apple-darwin/release/unarc $(ARGS); \
+	elif [ -x "./target/release/unarc" ]; then \
+		./target/release/unarc $(ARGS); \
+	elif command -v cargo >/dev/null 2>&1; then \
+		cargo run --release -- $(ARGS); \
+	else \
+		./scripts/dev.sh cargo run --release -- $(ARGS); \
+	fi
 
 bench:
 	./scripts/benchmark.sh

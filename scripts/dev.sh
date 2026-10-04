@@ -7,7 +7,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Ensure Docker image is built
 if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
     echo "Building ${IMAGE_NAME} Docker image..."
-    docker build --target dev -t "${IMAGE_NAME}" "${DIR}"
+    docker build -f "${DIR}/Dockerfile.dev" -t "${IMAGE_NAME}" "${DIR}"
 fi
 
 # Function to run cargo command in Docker

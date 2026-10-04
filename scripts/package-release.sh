@@ -142,6 +142,10 @@ if [ -n "${RELEASE_SIGNING_KEY:-}" ]; then
     else
         "${DIR}/scripts/dev.sh" cargo run --bin unarc-sign -- --verify-manifest "/workspace/dist/${PACKAGE_NAME}.manifest.json"
     fi
+
+    # Create canonical unversioned manifest aliases for direct latest release downloads
+    cp "${MANIFEST_FILE}" "${DIST_DIR}/unarc-${TARGET_OS}-${TARGET_ARCH}.manifest.json"
+    cp "${MANIFEST_FILE}" "${DIST_DIR}/manifest-${TARGET_OS}-${TARGET_ARCH}.json"
 else
     echo "[3/4] Notice: RELEASE_SIGNING_KEY not set; skipping release manifest signing."
     echo "[4/4] Release packaging complete (unsigned development artifact)."

@@ -19,16 +19,17 @@ Choose the path that fits your needs:
 ---
 
 ### Path 1: Native End User (Recommended)
-Download the standalone, self-contained `unarc` executable for your system from [GitHub Releases](https://github.com/mosabbir-maruf/Unarc/releases/latest). Unarc natively embeds the authentic pinned `7zz v26.03` engine—no Rust, Cargo, 7-Zip, Homebrew, Docker, or runtime dependencies are required.
+Download the standalone, self-contained executable for your platform from [GitHub Releases](https://github.com/mosabbir-maruf/Unarc/releases/latest) (following the `unarc-<version>-macos-arm64` pattern for macOS Apple Silicon). Unarc natively embeds the authentic pinned `7zz v26.03` engine—no Rust, Cargo, 7-Zip, Homebrew, Docker, or runtime dependencies are required.
 
 After downloading:
 ```bash
-# Make executable and run immediately:
-chmod +x unarc
-./unarc
+# Make executable and run directly:
+chmod +x ./unarc-0.2.2-macos-arm64
+./unarc-0.2.2-macos-arm64
 
-# Or move to your PATH (e.g., ~/.local/bin) to run anywhere:
-mv unarc ~/.local/bin/
+# Recommended PATH installation (run 'unarc' from anywhere):
+mkdir -p ~/.local/bin
+mv ./unarc-0.2.2-macos-arm64 ~/.local/bin/unarc
 unarc
 ```
 
@@ -68,20 +69,19 @@ Unarc is distributed as a **single, self-contained native executable** for suppo
 
 ### Quick Download & Run (Manual)
 1. Go to [GitHub Releases (Latest)](https://github.com/mosabbir-maruf/Unarc/releases/latest).
-2. Download the standalone executable for your operating system:
+2. Download the standalone executable for your operating system following the `unarc-<version>-<platform>` pattern (e.g. `unarc-<version>-macos-arm64` for macOS Apple Silicon):
    - `unarc-0.2.2-macos-arm64` (macOS Apple Silicon)
    - `unarc-0.2.2-linux-x86_64` (Linux 64-bit Intel/AMD)
    - `unarc-0.2.2-linux-aarch64` (Linux 64-bit ARM)
-3. Make it executable and run:
+3. Make it executable and run directly:
    ```bash
-   chmod +x unarc-0.2.2-macos-arm64
+   chmod +x ./unarc-0.2.2-macos-arm64
    ./unarc-0.2.2-macos-arm64
    ```
-4. *(Optional)* Move it to your `PATH` (such as `~/.local/bin/unarc`) to run from any terminal:
+4. *(Recommended)* Move it to your `PATH` (such as `~/.local/bin/unarc`) to run from any terminal:
    ```bash
    mkdir -p ~/.local/bin
-   mv unarc-0.2.2-macos-arm64 ~/.local/bin/unarc
-   chmod 0755 ~/.local/bin/unarc
+   mv ./unarc-0.2.2-macos-arm64 ~/.local/bin/unarc
    unarc
    ```
 
@@ -152,6 +152,30 @@ When downloading standalone executables via a web browser or `curl` on macOS, Ap
 
 > [!CAUTION]
 > **Never disable Gatekeeper globally** (e.g. `spctl --master-disable`). Always remove the quarantine attribute targeting *only* the specific verified Unarc executable file after confirming its SHA-256 checksum.
+
+### Uninstall / Remove
+
+Because Unarc is distributed as a self-contained standalone executable with no background daemons or system package manager hooks, uninstallation is straightforward:
+
+- **For a PATH installation (`~/.local/bin/unarc`)**:
+  ```bash
+  rm ~/.local/bin/unarc
+  command -v unarc || echo "Unarc removed"
+  ```
+
+- **For a directly downloaded standalone binary**:
+  Simply delete the downloaded executable file (e.g. `rm ./unarc-0.2.2-macos-arm64`). Removing the binary is sufficient to completely remove Unarc from your system.
+
+### Privacy & Local Storage
+
+Unarc is designed with a strict zero-telemetry, zero-persistence privacy model:
+- **No Background Services**: Does not install a background service or daemon.
+- **No Telemetry**: Does not collect telemetry, analytics, or usage data.
+- **No Persistent Password Store**: Does not maintain a persistent password store or credential cache.
+- **Zero Logged Credentials**: Does not store passwords in configuration files or logs.
+- **Self-Contained Execution**: Does not require a cloud or backend service; runs completely offline.
+- **Zero Runtime Downloads**: Does not download runtime dependencies at execution time.
+- **Ephemeral Operation Data**: Cleans temporary operation data (such as isolated sandbox staging workspaces) when applicable upon operation completion.
 
 ---
 

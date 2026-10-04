@@ -485,7 +485,7 @@ pub fn error_hint(code: crate::error::ErrorCode) -> Option<&'static str> {
         MissingVolume => Some("Ensure all multi-part volume files (.part1, .part2, .z01, etc.) are in the same folder."),
         InvalidVolume => Some("A multi-part volume appears corrupt, mismatched, or truncated."),
         CorruptArchive => Some("The archive header or data failed verification."),
-        PasswordRequired => Some("Provide a password using interactive prompt or '--password' / 'UNARC_PASSWORD'."),
+        PasswordRequired => Some("Provide the archive password via the interactive terminal prompt."),
         InvalidPassword => Some("The provided password could not decrypt the archive."),
         OutputInvalid => Some("Check that destination is a valid directory path and not an existing non-directory file."),
         PathTraversal => Some("Refused extraction due to unsafe paths breakout (../) outside destination directory."),

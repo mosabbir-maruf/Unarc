@@ -1,0 +1,26 @@
+services:
+  unarc-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: unarc-dev:latest
+    stdin_open: true
+    tty: true
+    environment:
+      - UNARC_BUNDLED_7ZZ=/opt/unarc/bin/7zz
+      - CARGO_TERM_COLOR=always
+      - RELEASE_SIGNING_KEY=${RELEASE_SIGNING_KEY:-}
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/workspace/target
+    working_dir: /workspace
+
+volumes:
+  cargo-registry:
+    name: unarc-cargo-registry
+  cargo-git:
+    name: unarc-cargo-git
+  cargo-target:
+    name: unarc-cargo-target

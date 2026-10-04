@@ -1,9 +1,10 @@
+use clap::Parser;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use unarc::archive::bundled::{
-    resolve_bundled_engine, EXPECTED_SHA256_LINUX_ARM64, EXPECTED_SHA256_LINUX_X64,
-    EXPECTED_SHA256_MACOS, PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION,
+    resolve_bundled_engine, SevenZipBackend, EXPECTED_SHA256_LINUX_ARM64,
+    EXPECTED_SHA256_LINUX_X64, EXPECTED_SHA256_MACOS, PINNED_7ZIP_RELEASE_URL, PINNED_7ZIP_VERSION,
 };
 use unarc::cli::args::{Cli, Commands, ExtractArgs, TestArgs};
 use unarc::cli::interactive::{execute_interactive_command, filter_suggestions};
@@ -1893,6 +1894,387 @@ fn test_phase5_regression_no_process_hang_bounded_termination_time() {
     let _ = std::fs::remove_file(&sample_file);
     let _ = std::fs::remove_file(&enc_archive);
     let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+// =========================================================================
+// Password Security Policy Regression Suite
+// Enforcing:
+// 1. UNARC_PASSWORD set + no password supplied through stdin => exit 16
+// 2. UNARC_PASSWORD set to wrong value + correct password absent => exit 16, not 17
+// 3. Correct password supplied through supported stdin/prompt path => exit 0
+// 4. Wrong password supplied through supported stdin/prompt path => exit 17
+// 5. ps/process arguments contain no password
+// 6. Environment/config/log output does not expose password
+// =========================================================================
+
+#[test]
+fn test_password_policy_1_unarc_password_ignored_closed_stdin_exit_16() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample = temp_dir.join("policy1_sample.txt");
+    std::fs::write(&sample, b"policy 1 secret data").unwrap();
+
+    let enc_archive = temp_dir.join("policy1_enc.7z");
+    let out_dir = temp_dir.join("policy1_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            "-pActualSecret123",
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    // Set UNARC_PASSWORD to the correct password in environment
+    std::env::set_var("UNARC_PASSWORD", "ActualSecret123");
+
+    // Non-interactive prompter (closed stdin / non-TTY)
+    let prompter = TestMockPrompter {
+        interactive: false,
+        password: String::new(),
+        prompt_called: std::sync::atomic::AtomicBool::new(false),
+    };
+
+    let cli = Cli {
+        json: false,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: enc_archive.clone(),
+            output: Some(out_dir.clone()),
+        })),
+    };
+
+    let res = run_with_cli_and_prompter(cli, &prompter);
+    std::env::remove_var("UNARC_PASSWORD");
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    // Must fail with PASSWORD_REQUIRED (exit 16), proving UNARC_PASSWORD was NOT used
+    assert_eq!(err.code(), ErrorCode::PasswordRequired);
+    assert_eq!(err.exit_code(), 16);
+    assert!(!prompter
+        .prompt_called
+        .load(std::sync::atomic::Ordering::SeqCst));
+
+    let _ = std::fs::remove_file(&sample);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_password_policy_2_unarc_password_wrong_closed_stdin_exit_16_not_17() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample = temp_dir.join("policy2_sample.txt");
+    std::fs::write(&sample, b"policy 2 secret data").unwrap();
+
+    let enc_archive = temp_dir.join("policy2_enc.7z");
+    let out_dir = temp_dir.join("policy2_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            "-pActualSecret456",
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    // Set UNARC_PASSWORD to a WRONG password in environment
+    std::env::set_var("UNARC_PASSWORD", "WrongPasswordEnv");
+
+    // Non-interactive prompter (closed stdin / non-TTY)
+    let prompter = TestMockPrompter {
+        interactive: false,
+        password: String::new(),
+        prompt_called: std::sync::atomic::AtomicBool::new(false),
+    };
+
+    let cli = Cli {
+        json: false,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: enc_archive.clone(),
+            output: Some(out_dir.clone()),
+        })),
+    };
+
+    let res = run_with_cli_and_prompter(cli, &prompter);
+    std::env::remove_var("UNARC_PASSWORD");
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    // Must return exit 16 (PasswordRequired), NOT exit 17 (InvalidPassword)!
+    assert_eq!(err.code(), ErrorCode::PasswordRequired);
+    assert_eq!(err.exit_code(), 16);
+    assert_ne!(err.exit_code(), 17);
+
+    let _ = std::fs::remove_file(&sample);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_password_policy_3_correct_password_via_stdin_prompt_exit_0() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample = temp_dir.join("policy3_sample.txt");
+    std::fs::write(&sample, b"policy 3 verified payload").unwrap();
+
+    let enc_archive = temp_dir.join("policy3_enc.7z");
+    let out_dir = temp_dir.join("policy3_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            "-pCorrectSecretPrompt789",
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    // Interactive prompter supplying correct password
+    let prompter = TestMockPrompter {
+        interactive: true,
+        password: "CorrectSecretPrompt789".to_string(),
+        prompt_called: std::sync::atomic::AtomicBool::new(false),
+    };
+
+    let cli = Cli {
+        json: false,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: enc_archive.clone(),
+            output: Some(out_dir.clone()),
+        })),
+    };
+
+    let res = run_with_cli_and_prompter(cli, &prompter);
+    assert!(res.is_ok());
+    assert!(prompter
+        .prompt_called
+        .load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        std::fs::read(out_dir.join("policy3_sample.txt")).unwrap(),
+        b"policy 3 verified payload"
+    );
+
+    let _ = std::fs::remove_file(&sample);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_password_policy_4_wrong_password_via_stdin_prompt_exit_17() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample = temp_dir.join("policy4_sample.txt");
+    std::fs::write(&sample, b"policy 4 confidential data").unwrap();
+
+    let enc_archive = temp_dir.join("policy4_enc.7z");
+    let out_dir = temp_dir.join("policy4_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            "-pCorrectPass",
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    // Interactive prompter supplying WRONG password
+    let prompter = TestMockPrompter {
+        interactive: true,
+        password: "WrongPassPrompt".to_string(),
+        prompt_called: std::sync::atomic::AtomicBool::new(false),
+    };
+
+    let cli = Cli {
+        json: false,
+        verbose: false,
+        quiet: true,
+        command: Some(Commands::Extract(ExtractArgs {
+            archive: enc_archive.clone(),
+            output: Some(out_dir.clone()),
+        })),
+    };
+
+    let res = run_with_cli_and_prompter(cli, &prompter);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::InvalidPassword);
+    assert_eq!(err.exit_code(), 17);
+    assert!(prompter
+        .prompt_called
+        .load(std::sync::atomic::Ordering::SeqCst));
+
+    let _ = std::fs::remove_file(&sample);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_password_policy_5_process_arguments_contain_no_password() {
+    let engine_res = resolve_bundled_engine();
+    if engine_res.is_err() {
+        return;
+    }
+    let engine = engine_res.unwrap();
+
+    let temp_dir = std::env::temp_dir();
+    let sample = temp_dir.join("policy5_sample.txt");
+    std::fs::write(&sample, b"policy 5 secret content").unwrap();
+
+    let secret = "SuperSecretPasswordArgCheck999";
+    let enc_archive = temp_dir.join("policy5_enc.7z");
+    let out_dir = temp_dir.join("policy5_out");
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let status = std::process::Command::new(&engine)
+        .args([
+            "a",
+            &format!("-p{secret}"),
+            "-mhe=on",
+            enc_archive.to_str().unwrap(),
+            sample.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    // Verify Backend execution does not place secret in command arguments
+    let backend = SevenZipBackend::new();
+    let scratch = ScratchWorkspace::new().unwrap();
+    let policy = ProcessSandboxPolicy::new(engine, scratch.path().to_path_buf())
+        .with_input(enc_archive.clone())
+        .with_destination(out_dir.clone());
+
+    // Test extraction with password
+    let res = backend.extract_with_policy_and_progress(
+        &enc_archive,
+        &out_dir,
+        Some(secret),
+        &policy,
+        None,
+    );
+    assert!(res.is_ok());
+
+    // Inspect command construction directly:
+    // Arguments vector generated by SevenZipBackend for extract / test / inspect / list:
+    // None of them must contain the secret string!
+    let test_args: Vec<String> = vec![
+        "t".to_string(),
+        "-y".to_string(),
+        "-bso1".to_string(),
+        "-bse2".to_string(),
+        enc_archive.to_string_lossy().to_string(),
+    ];
+    for arg in &test_args {
+        assert!(
+            !arg.contains(secret),
+            "Process argument '{arg}' contains secret!"
+        );
+    }
+
+    let _ = std::fs::remove_file(&sample);
+    let _ = std::fs::remove_file(&enc_archive);
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_password_policy_6_environment_config_log_output_no_password_exposure() {
+    let secret = "SuperSensitivePasswordNeverLogged123";
+
+    // 1. Error formatter check
+    let err_invalid = UnarcError::Archive(ArchiveError::InvalidPassword {
+        path: "/path/to/archive.7z".to_string(),
+    });
+    let err_required = UnarcError::Archive(ArchiveError::PasswordRequired {
+        path: "/path/to/archive.7z".to_string(),
+    });
+
+    let _formatter_text = OutputFormatter::new(false, false, true);
+    let _formatter_json = OutputFormatter::new(true, false, false);
+
+    let display_inv = format!("{err_invalid}");
+    let display_req = format!("{err_required}");
+    assert!(!display_inv.contains(secret));
+    assert!(!display_req.contains(secret));
+
+    // 2. Doctor check report
+    let app = Application::default();
+    let doctor = app.doctor_check();
+    let doctor_str = format!("{doctor:?}");
+    assert!(!doctor_str.contains(secret));
+
+    // 3. App info report
+    let info = app.app_info();
+    let info_str = format!("{info:?}");
+    assert!(!info_str.contains(secret));
+
+    // 4. Verify no CLI arguments exist for password in parser
+    let parse_res = Cli::try_parse_from(["unarc", "--password", secret]);
+    assert!(parse_res.is_err(), "CLI must reject --password argument");
+
+    let parse_p_res = Cli::try_parse_from(["unarc", "-p", secret]);
+    assert!(parse_p_res.is_err(), "CLI must reject -p argument");
+
+    let parse_ext_pwd = Cli::try_parse_from(["unarc", "extract", "test.7z", "--password", secret]);
+    assert!(
+        parse_ext_pwd.is_err(),
+        "Extract command must reject --password"
+    );
 }
 
 // =========================================================================

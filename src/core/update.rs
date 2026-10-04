@@ -137,6 +137,9 @@ pub struct UpdateCheckResult {
     pub update_available: bool,
     /// Cryptographically verified release manifest.
     pub manifest: ReleaseManifest,
+    /// Base URL or directory where release artifacts are hosted.
+    #[serde(default)]
+    pub base_url: String,
 }
 
 /// Outcome of applying an update.
@@ -230,8 +233,8 @@ impl<T: DownloadTransport> UpdateManager<T> {
         }
     }
 
-    /// Resolves the full URL or path to the release manifest.
-    fn resolve_manifest_source(&self, source_override: Option<&str>) -> (String, String) {
+    /// Resolves candidate URLs and corresponding base artifact URLs to check for release manifests.
+    fn resolve_manifest_candidates(&self, source_override: Option<&str>) -> Vec<(String, String)> {
         let base = source_override
             .unwrap_or(&self.default_source)
             .trim_end_matches('/');
@@ -241,10 +244,62 @@ impl<T: DownloadTransport> UpdateManager<T> {
                 .parent()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| ".".to_string());
-            (base.to_string(), parent)
-        } else {
-            (format!("{base}/manifest.json"), base.to_string())
+            return vec![(base.to_string(), parent)];
         }
+
+        let target_os = std::env::consts::OS;
+        let target_arch = match (target_os, std::env::consts::ARCH) {
+            ("macos", "aarch64") => "arm64",
+            (_, a) => a,
+        };
+
+        let mut candidates = Vec::new();
+
+        // 1. If base is GitHub releases download/latest, query the latest tag to resolve canonical versioned manifest URL
+        if base.contains("github.com") && base.contains("/releases/") {
+            if let Some((owner_repo, _)) = base.split_once("/releases/") {
+                let latest_url = format!("{owner_repo}/releases/latest");
+                if let Ok(output) = Command::new("curl")
+                    .args(["--silent", "--head", "--max-time", "10", &latest_url])
+                    .output()
+                {
+                    if output.status.success() {
+                        let header_text = String::from_utf8_lossy(&output.stdout);
+                        for line in header_text.lines() {
+                            let trimmed_line = line.trim();
+                            if trimmed_line.to_ascii_lowercase().starts_with("location:") {
+                                if let Some((_, tag_part)) = trimmed_line.split_once("/tag/") {
+                                    let tag = tag_part.trim().trim_matches('/');
+                                    let version = tag.trim_start_matches('v');
+                                    let download_base =
+                                        format!("{owner_repo}/releases/download/{tag}");
+                                    let canonical_manifest = format!(
+                                        "{download_base}/unarc-{version}-{target_os}-{target_arch}.manifest.json"
+                                    );
+                                    candidates.push((canonical_manifest, download_base));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Unversioned platform-specific manifest names (direct download aliases)
+        candidates.push((
+            format!("{base}/unarc-{target_os}-{target_arch}.manifest.json"),
+            base.to_string(),
+        ));
+        candidates.push((
+            format!("{base}/manifest-{target_os}-{target_arch}.json"),
+            base.to_string(),
+        ));
+
+        // 3. Fallback to generic manifest.json (e.g. for local test directories)
+        candidates.push((format!("{base}/manifest.json"), base.to_string()));
+
+        candidates
     }
 
     /// Checks the update source for a new signed release.
@@ -252,34 +307,60 @@ impl<T: DownloadTransport> UpdateManager<T> {
         &self,
         source_override: Option<&str>,
     ) -> Result<UpdateCheckResult, UnarcError> {
-        let (manifest_url, _) = self.resolve_manifest_source(source_override);
-        let manifest_bytes = self.transport.fetch(&manifest_url)?;
+        let candidates = self.resolve_manifest_candidates(source_override);
+        let mut last_err = None;
 
-        let manifest: ReleaseManifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
-            UnarcError::Security(SecurityError::PolicyViolation {
-                reason: format!("Failed to parse release manifest JSON: {e}"),
+        for (manifest_url, base_url) in &candidates {
+            let manifest_bytes = match self.transport.fetch(manifest_url) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
+
+            let manifest: ReleaseManifest = match serde_json::from_slice(&manifest_bytes) {
+                Ok(m) => m,
+                Err(e) => {
+                    last_err = Some(UnarcError::Security(SecurityError::PolicyViolation {
+                        reason: format!(
+                            "Failed to parse release manifest JSON from {manifest_url}: {e}"
+                        ),
+                    }));
+                    continue;
+                }
+            };
+
+            // 1. Verify cryptographic Ed25519 signature
+            if let Err(e) = manifest.verify_signature(&self.verifier) {
+                last_err = Some(UnarcError::Security(e));
+                continue;
+            }
+
+            // 2. Verify target architecture compatibility
+            if let Err(e) = manifest.verify_architecture_compatibility() {
+                last_err = Some(UnarcError::Security(e));
+                continue;
+            }
+
+            let current_version = env!("CARGO_PKG_VERSION").to_string();
+            let update_available = is_version_newer(&manifest.version, &current_version);
+
+            return Ok(UpdateCheckResult {
+                current_version,
+                latest_version: manifest.version.clone(),
+                update_available,
+                manifest,
+                base_url: base_url.clone(),
+            });
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            UnarcError::Archive(ArchiveError::BackendFailure {
+                backend: "updater".to_string(),
+                message: "No valid release manifest found at candidate sources".to_string(),
             })
-        })?;
-
-        // 1. Verify cryptographic Ed25519 signature
-        manifest
-            .verify_signature(&self.verifier)
-            .map_err(UnarcError::Security)?;
-
-        // 2. Verify target architecture compatibility
-        manifest
-            .verify_architecture_compatibility()
-            .map_err(UnarcError::Security)?;
-
-        let current_version = env!("CARGO_PKG_VERSION").to_string();
-        let update_available = is_version_newer(&manifest.version, &current_version);
-
-        Ok(UpdateCheckResult {
-            current_version,
-            latest_version: manifest.version.clone(),
-            update_available,
-            manifest,
-        })
+        }))
     }
 
     /// Downloads, verifies, and atomically replaces the running binary.
@@ -321,9 +402,9 @@ impl<T: DownloadTransport> UpdateManager<T> {
         // 2. Query release source and verify manifest
         let check_res = self.check_for_update(source_override)?;
         let manifest = check_res.manifest;
-        let (_, base_url) = self.resolve_manifest_source(source_override);
+        let base_url = check_res.base_url;
 
-        // 2. Resolve artifact URL
+        // 3. Resolve artifact URL
         let artifact_source = if manifest.artifact_url.starts_with("http://")
             || manifest.artifact_url.starts_with("https://")
             || manifest.artifact_url.starts_with("file://")
@@ -332,7 +413,11 @@ impl<T: DownloadTransport> UpdateManager<T> {
         {
             manifest.artifact_url.clone()
         } else {
-            format!("{base_url}/{}", manifest.artifact_url)
+            format!(
+                "{}/{}",
+                base_url.trim_end_matches('/'),
+                manifest.artifact_url
+            )
         };
 
         // 3. Staging file in SAME parent directory for POSIX atomic rename

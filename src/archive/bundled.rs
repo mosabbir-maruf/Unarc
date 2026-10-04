@@ -446,8 +446,37 @@ impl SevenZipBackend {
         SandboxRunner::execute(policy, args)
     }
 
+    /// Invokes the bundled 7zz binary confined within the specified sandbox policy with optional standard input bytes.
+    pub fn execute_with_policy_and_stdin<I, S>(
+        &self,
+        args: I,
+        policy: &ProcessSandboxPolicy,
+        stdin_input: Option<&[u8]>,
+    ) -> Result<Output, ArchiveError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        SandboxRunner::execute_with_stdin(policy, args, stdin_input)
+    }
+
     /// Invokes the bundled 7zz binary with an isolated scratch sandbox.
+    #[allow(dead_code)]
     fn execute_7zz<I, S>(&self, args: I, input_path: Option<&Path>) -> Result<Output, ArchiveError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.execute_7zz_with_stdin(args, input_path, None)
+    }
+
+    /// Invokes the bundled 7zz binary with an isolated scratch sandbox and optional standard input bytes.
+    fn execute_7zz_with_stdin<I, S>(
+        &self,
+        args: I,
+        input_path: Option<&Path>,
+        stdin_input: Option<&[u8]>,
+    ) -> Result<Output, ArchiveError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -463,7 +492,7 @@ impl SevenZipBackend {
             policy = policy.with_input(p.to_path_buf());
         }
 
-        SandboxRunner::execute(&policy, args)
+        SandboxRunner::execute_with_stdin(&policy, args, stdin_input)
     }
 
     /// Tests the integrity of an archive confined by the given sandbox policy.
@@ -503,25 +532,27 @@ impl SevenZipBackend {
             args.push("-bsp2".to_string());
         }
 
-        if let Some(pwd) = password {
-            args.push(format!("-p{pwd}"));
+        let stdin_bytes = if let Some(pwd) = password {
+            Some(format!("{pwd}\n").into_bytes())
         } else {
             args.push("-p".to_string());
-        }
+            None
+        };
 
         args.push(path.to_string_lossy().to_string());
 
         let output = if let Some(ref mut cb) = progress {
             let mut parser = SevenZipProgressParser::new();
-            SandboxRunner::execute_with_progress(
+            SandboxRunner::execute_with_progress_and_stdin(
                 policy,
                 &args,
                 Some(move |chunk: &[u8]| {
                     parser.feed(chunk, |pct, file| cb.on_progress(pct, file));
                 }),
+                stdin_bytes.as_deref(),
             )?
         } else {
-            self.execute_with_policy(&args, policy)?
+            self.execute_with_policy_and_stdin(&args, policy, stdin_bytes.as_deref())?
         };
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -655,25 +686,27 @@ impl SevenZipBackend {
             args.push("-bsp2".to_string());
         }
 
-        if let Some(pwd) = password {
-            args.push(format!("-p{pwd}"));
+        let stdin_bytes = if let Some(pwd) = password {
+            Some(format!("{pwd}\n").into_bytes())
         } else {
             args.push("-p".to_string());
-        }
+            None
+        };
 
         args.push(path.to_string_lossy().to_string());
 
         let output = if let Some(ref mut cb) = progress {
             let mut parser = SevenZipProgressParser::new();
-            SandboxRunner::execute_with_progress(
+            SandboxRunner::execute_with_progress_and_stdin(
                 policy,
                 &args,
                 Some(move |chunk: &[u8]| {
                     parser.feed(chunk, |pct, file| cb.on_progress(pct, file));
                 }),
+                stdin_bytes.as_deref(),
             )?
         } else {
-            self.execute_with_policy(&args, policy)?
+            self.execute_with_policy_and_stdin(&args, policy, stdin_bytes.as_deref())?
         };
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -794,15 +827,16 @@ impl ArchiveBackend for SevenZipBackend {
             "-bse2".to_string(),
         ];
 
-        if let Some(pwd) = password {
-            args.push(format!("-p{pwd}"));
+        let stdin_bytes = if let Some(pwd) = password {
+            Some(format!("{pwd}\n").into_bytes())
         } else {
             args.push("-p".to_string()); // empty password to probe header encryption
-        }
+            None
+        };
 
         args.push(path.to_string_lossy().to_string());
 
-        let output = self.execute_7zz(&args, Some(path))?;
+        let output = self.execute_7zz_with_stdin(&args, Some(path), stdin_bytes.as_deref())?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -849,15 +883,16 @@ impl ArchiveBackend for SevenZipBackend {
             "-bse2".to_string(),
         ];
 
-        if let Some(pwd) = password {
-            args.push(format!("-p{pwd}"));
+        let stdin_bytes = if let Some(pwd) = password {
+            Some(format!("{pwd}\n").into_bytes())
         } else {
             args.push("-p".to_string());
-        }
+            None
+        };
 
         args.push(path.to_string_lossy().to_string());
 
-        let output = self.execute_7zz(&args, Some(path))?;
+        let output = self.execute_7zz_with_stdin(&args, Some(path), stdin_bytes.as_deref())?;
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         let mut entries = Vec::new();

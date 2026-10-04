@@ -409,12 +409,34 @@ impl SandboxRunner {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut cmd = Self::build_command(policy, args)?;
+        Self::spawn_with_stdin(policy, args, None)
+    }
 
-        let child = cmd.spawn().map_err(|e| ArchiveError::BackendFailure {
+    /// Spawns the engine process confined by the policy with optional piped standard input bytes.
+    pub fn spawn_with_stdin<I, S>(
+        policy: &ProcessSandboxPolicy,
+        args: I,
+        stdin_input: Option<&[u8]>,
+    ) -> Result<ChildProcessGuard, ArchiveError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut cmd = Self::build_command(policy, args, stdin_input.is_some())?;
+
+        let mut child = cmd.spawn().map_err(|e| ArchiveError::BackendFailure {
             backend: "bundled-7zz".to_string(),
             message: format!("Failed to spawn confined engine process: {e}"),
         })?;
+
+        if let Some(input) = stdin_input {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(input);
+                let _ = stdin.flush();
+                drop(stdin);
+            }
+        }
 
         let pid = child.id() as libc::pid_t;
         Ok(ChildProcessGuard::new(child, pid))
@@ -426,7 +448,20 @@ impl SandboxRunner {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        Self::execute_with_progress::<I, S, fn(&[u8])>(policy, args, None)
+        Self::execute_with_progress_and_stdin::<I, S, fn(&[u8])>(policy, args, None, None)
+    }
+
+    /// Executes the engine process to completion with sandboxing, providing piped standard input bytes.
+    pub fn execute_with_stdin<I, S>(
+        policy: &ProcessSandboxPolicy,
+        args: I,
+        stdin_input: Option<&[u8]>,
+    ) -> Result<Output, ArchiveError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        Self::execute_with_progress_and_stdin::<I, S, fn(&[u8])>(policy, args, None, stdin_input)
     }
 
     /// Executes the engine process to completion with sandboxing, streaming stderr progress chunks.
@@ -440,7 +475,22 @@ impl SandboxRunner {
         S: AsRef<OsStr>,
         F: FnMut(&[u8]) + Send,
     {
-        let guard = Self::spawn(policy, args)?;
+        Self::execute_with_progress_and_stdin(policy, args, progress_callback, None)
+    }
+
+    /// Executes the engine process to completion with sandboxing, streaming progress and supplying optional stdin bytes.
+    pub fn execute_with_progress_and_stdin<I, S, F>(
+        policy: &ProcessSandboxPolicy,
+        args: I,
+        progress_callback: Option<F>,
+        stdin_input: Option<&[u8]>,
+    ) -> Result<Output, ArchiveError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+        F: FnMut(&[u8]) + Send,
+    {
+        let guard = Self::spawn_with_stdin(policy, args, stdin_input)?;
         let output = guard.wait_with_streaming(progress_callback).map_err(|e| {
             ArchiveError::BackendFailure {
                 backend: "bundled-7zz".to_string(),
@@ -458,7 +508,11 @@ impl SandboxRunner {
     }
 
     /// Builds a sanitized, confined `Command` configured for the platform.
-    fn build_command<I, S>(policy: &ProcessSandboxPolicy, args: I) -> Result<Command, ArchiveError>
+    fn build_command<I, S>(
+        policy: &ProcessSandboxPolicy,
+        args: I,
+        has_stdin: bool,
+    ) -> Result<Command, ArchiveError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -475,7 +529,7 @@ impl SandboxRunner {
                 for arg in arg_list {
                     cmd.arg(arg);
                 }
-                apply_process_isolation(&mut cmd, policy);
+                apply_process_isolation_with_stdin(&mut cmd, policy, has_stdin);
                 return Ok(cmd);
             }
         }
@@ -485,13 +539,23 @@ impl SandboxRunner {
         for arg in arg_list {
             cmd.arg(arg);
         }
-        apply_process_isolation(&mut cmd, policy);
+        apply_process_isolation_with_stdin(&mut cmd, policy, has_stdin);
         Ok(cmd)
     }
 }
 
-/// Applies strict environment purging, process grouping, and pre-exec constraints.
-fn apply_process_isolation(cmd: &mut Command, policy: &ProcessSandboxPolicy) {
+/// Applies strict environment purging, process grouping, and pre-exec constraints (default: no stdin).
+#[allow(dead_code)]
+pub fn apply_process_isolation(cmd: &mut Command, policy: &ProcessSandboxPolicy) {
+    apply_process_isolation_with_stdin(cmd, policy, false);
+}
+
+/// Applies strict environment purging, process grouping, pre-exec constraints, and optional stdin stream.
+pub fn apply_process_isolation_with_stdin(
+    cmd: &mut Command,
+    policy: &ProcessSandboxPolicy,
+    has_stdin: bool,
+) {
     // 1. Purge all ambient environment variables (AWS credentials, SSH keys, user secrets)
     cmd.env_clear();
 
@@ -502,7 +566,11 @@ fn apply_process_isolation(cmd: &mut Command, policy: &ProcessSandboxPolicy) {
     cmd.env("TMPDIR", &policy.scratch_dir);
 
     // 3. Prevent arbitrary standard input / stream output safely
-    cmd.stdin(std::process::Stdio::null());
+    if has_stdin {
+        cmd.stdin(std::process::Stdio::piped());
+    } else {
+        cmd.stdin(std::process::Stdio::null());
+    }
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 

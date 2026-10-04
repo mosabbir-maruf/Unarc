@@ -1226,7 +1226,7 @@ fn run_command_in_tui_layout(
 
 fn run_test_in_tui_layout(
     app: &Application,
-    _formatter: &crate::cli::output::OutputFormatter,
+    formatter: &crate::cli::output::OutputFormatter,
     inline_archive: Option<String>,
     layout: &TuiLayout,
 ) -> Result<()> {
@@ -1252,11 +1252,12 @@ fn run_test_in_tui_layout(
         crate::cli::progress::truncate_filename(&archive_path.display().to_string(), max_w);
     println!("{}", layout.row(&format!("Testing archive: {disp_path}")));
 
+    let show_progress = formatter.should_show_progress();
     let res = crate::cli::run_test_with_prompt(
         app,
         &archive_path,
         &crate::cli::TerminalPasswordPrompter,
-        false,
+        show_progress,
     )?;
 
     let status_badge = if res.passed {
@@ -1287,7 +1288,7 @@ fn run_test_in_tui_layout(
 
 fn run_extract_in_tui_layout(
     app: &Application,
-    _formatter: &crate::cli::output::OutputFormatter,
+    formatter: &crate::cli::output::OutputFormatter,
     inline_archive: Option<String>,
     inline_dest: Option<String>,
     layout: &TuiLayout,
@@ -1340,12 +1341,13 @@ fn run_extract_in_tui_layout(
         layout.row(&format!("Extracting archive: {disp_path}"))
     );
 
+    let show_progress = formatter.should_show_progress();
     let res = crate::cli::run_extract_with_prompt(
         app,
         &archive_path,
         dest_opt,
         &crate::cli::TerminalPasswordPrompter,
-        false,
+        show_progress,
     )?;
 
     let status_badge = if layout.color_enabled {

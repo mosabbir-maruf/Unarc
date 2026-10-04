@@ -624,7 +624,7 @@ pub fn generate_dashboard_rows(
         };
         screen_rows.push(layout.row(&format!("{prompt_sym} {disp_buf}")));
         cursor_x = layout.left_margin + 2 + disp_buf.chars().count();
-        cursor_y = if compact { 7 } else { 9 };
+        cursor_y = screen_rows.len().saturating_sub(1);
 
         if !compact {
             screen_rows.push(String::new());
@@ -690,7 +690,7 @@ pub fn generate_dashboard_rows(
         screen_rows.push(layout.row(&format!("{prompt_sym} {disp_buf}")));
 
         cursor_x = layout.left_margin + 2 + disp_buf.chars().count();
-        cursor_y = if compact { 7 } else { 9 };
+        cursor_y = screen_rows.len().saturating_sub(1);
 
         if !compact {
             screen_rows.push(String::new());

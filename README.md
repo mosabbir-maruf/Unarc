@@ -272,21 +272,36 @@ Unarc provides a streamlined progression: **Install → Verify → First Run →
 
 Running `unarc` without arguments launches the interactive terminal interface:
 
-```
- _   _ _   _   _    ____   ____ 
-| | | | \ | | / \  |  _ \ / ___|
-| | | |  \| |/ _ \ | |_) | |    
-| |_| | |\  / ___ \|  _ <| |___ 
- \___/|_| \_/_/   \_\_| \_\\____|
-     Secure Archive Utility
+```text
+                        UNARC 0.2.5
+                     by Mosabbir Maruf
+                      macOS • arm64
+               7-Zip 26.03 • Sandbox ENFORCED
+                  ────────────────────────
 
-Type '/' to view commands, or '/help' for usage guidance.
-unarc › 
+                      Archive Utility
+                (Drop archive or enter path)
+
+  Enter archive path:
+  › 
+
+  Quick Actions:
+      Extract archive        /extract
+      Test integrity         /test
+      Archive info           /info
+      Security diagnostics   /doctor
+      Check for updates      /update
+      Security config        /config
+      Help & reference       /help
+      Exit session           /exit
+
+  ────────────────────────────────────────────────────────
+  Enter  Select    ↑↓  Navigate    /  Commands    Ctrl+C  Exit
 ```
 
-- **Command Palette**: Press `/` to open the command palette (`/extract`, `/test`, `/info`, `/doctor`, `/update`, `/config`, `/help`, `/exit`).
-- **Keyboard Navigation**: Arrow keys (`↑`/`↓`) navigate suggestions, `Tab` autocompletes, and `Enter` executes.
-- **Drag-and-Drop**: Dragging an archive file into the terminal automatically detects the path and prompts for extraction or testing.
+- **Command Palette**: Press `/` to open the interactive command palette (`/extract`, `/test`, `/info`, `/doctor`, `/update`, `/config`, `/help`, `/exit`) with real-time autocompletion.
+- **Keyboard Navigation**: Use arrow keys (`↑`/`↓`) to navigate quick actions and suggestions, `Tab` to autocomplete, and `Enter` to execute.
+- **Drag-and-Drop**: Dragging an archive file into the terminal automatically detects the path and presents contextual one-click actions (`[E]xtract`, `[T]est`, `[C]ancel`).
 
 ### Direct CLI Subcommands
 

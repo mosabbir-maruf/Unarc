@@ -4,22 +4,24 @@
 
 **An open-source, production-grade, security-focused archive utility CLI in Rust.**
 
-Targeting **macOS Apple Silicon** (`aarch64-apple-darwin`), **Linux** (`x86_64`, `aarch64`), and **Docker** distroless container runtime.  
-Zero-trust path containment, interactive terminal UX, deterministic exit codes, and an authentic bundled engine (`7zz v26.03`).
+<p align="center">
+  Targeting <b>macOS Apple Silicon</b> (<code>aarch64-apple-darwin</code>), <b>Linux</b> (<code>x86_64</code>, <code>aarch64</code>), and <b>Docker</b> distroless container runtime.<br>
+  Zero-trust path containment, interactive terminal UX, deterministic exit codes, and an authentic bundled engine (<code>7zz v26.03</code>).
+</p>
 
 <p align="center">
-  <b>Developer:</b> <a href="https://github.com/mosabbir-maruf">Mosabbir Maruf</a> &nbsp;|&nbsp;
-  <b>Engine:</b> 7-Zip (7zz v26.03) &nbsp;|&nbsp;
+  <b>Developer:</b> <a href="https://github.com/mosabbir-maruf" target="_blank" rel="noopener noreferrer">Mosabbir Maruf</a> &nbsp;|&nbsp;
+  <b>Engine:</b> <a href="https://www.7-zip.org" target="_blank" rel="noopener noreferrer">7-Zip (7zz v26.03)</a> &nbsp;|&nbsp;
   <b>License:</b> <a href="LICENSE">MIT</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/mosabbir-maruf/Unarc/releases/latest"><img src="https://img.shields.io/github/v/release/mosabbir-maruf/Unarc?label=Release&color=0891b2" alt="Release" /></a>
-  <a href="https://github.com/mosabbir-maruf/Unarc/actions"><img src="https://img.shields.io/github/actions/workflow/status/mosabbir-maruf/Unarc/ci.yml?label=CI%2FCD&color=16a34a" alt="CI/CD" /></a>
-  <img src="https://img.shields.io/badge/Platform-macOS%20Apple%20Silicon%20%7C%20Linux-blue" alt="Platforms" />
-  <img src="https://img.shields.io/badge/Docker-Distroless%20Runtime-2496ed?logo=docker&logoColor=white" alt="Docker" />
-  <img src="https://img.shields.io/badge/Rust-1.85%2B-orange?logo=rust&logoColor=white" alt="Rust" />
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License" /></a>
+  <a href="https://github.com/mosabbir-maruf/Unarc/releases/latest" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/github/v/release/mosabbir-maruf/Unarc?label=Release&logo=github&color=0891b2" alt="Release" /></a>
+  <a href="https://github.com/mosabbir-maruf/Unarc/actions" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/github/actions/workflow/status/mosabbir-maruf/Unarc/ci.yml?label=CI%2FCD&color=16a34a" alt="CI/CD" /></a>
+  <a href="https://doc.rust-lang.org" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Rust-1.85%2B-orange?logo=rust&logoColor=white" alt="Rust 1.85+ Documentation" /></a>
+  <a href="https://www.7-zip.org" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/7--Zip-26.03-blue?logo=7zip&logoColor=white" alt="7-Zip 26.03 Official Site" /></a>
+  <a href="https://github.com/mosabbir-maruf/Unarc/pkgs/container/unarc" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Docker-ghcr.io%2Fmosabbir--maruf%2Funarc-2496ed?logo=docker&logoColor=white" alt="Docker Container Package" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License: MIT" /></a>
 </p>
 
 <br />

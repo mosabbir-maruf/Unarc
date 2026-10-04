@@ -1,8 +1,32 @@
+<div align="center">
+
 # Unarc
 
-An open-source, production-grade, security-focused archive utility CLI in Rust.
+**An open-source, production-grade, security-focused archive utility CLI in Rust.**
 
-Targeting **macOS Apple Silicon** (`aarch64-apple-darwin`), **Linux** (`x86_64`, `aarch64`), and **Docker** distroless container runtime. Unarc enforces zero-trust path validation, interactive terminal UX, deterministic exit codes, and an authentic, hermetically bundled archive engine (`7zz v26.03`).
+Targeting **macOS Apple Silicon** (`aarch64-apple-darwin`), **Linux** (`x86_64`, `aarch64`), and **Docker** distroless container runtime.  
+Zero-trust path containment, interactive terminal UX, deterministic exit codes, and an authentic bundled engine (`7zz v26.03`).
+
+<p align="center">
+  <b>Developer:</b> <a href="https://github.com/mosabbir-maruf">Mosabbir Maruf</a> &nbsp;|&nbsp;
+  <b>Engine:</b> 7-Zip (7zz v26.03) &nbsp;|&nbsp;
+  <b>License:</b> <a href="LICENSE">MIT</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/mosabbir-maruf/Unarc/releases/latest"><img src="https://img.shields.io/github/v/release/mosabbir-maruf/Unarc?label=Release&color=0891b2" alt="Release" /></a>
+  <a href="https://github.com/mosabbir-maruf/Unarc/actions"><img src="https://img.shields.io/github/actions/workflow/status/mosabbir-maruf/Unarc/ci.yml?label=CI%2FCD&color=16a34a" alt="CI/CD" /></a>
+  <img src="https://img.shields.io/badge/Platform-macOS%20Apple%20Silicon%20%7C%20Linux-blue" alt="Platforms" />
+  <img src="https://img.shields.io/badge/Docker-Distroless%20Runtime-2496ed?logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/Rust-1.85%2B-orange?logo=rust&logoColor=white" alt="Rust" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License" /></a>
+</p>
+
+<br />
+
+<img src="./public/InteractiveMode-(TUI).png" alt="Unarc Interactive TUI Preview" width="100%" />
+
+</div>
 
 ---
 

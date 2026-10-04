@@ -76,6 +76,28 @@ impl OutputFormatter {
         }
     }
 
+    /// Prints a key-value row with standard 2-space indentation and aligned spacing.
+    pub fn print_row(&self, label: &str, value: &str) {
+        if !self.quiet {
+            if self.color_enabled {
+                println!("  \x1b[1m{label:<22}\x1b[0m {value}");
+            } else {
+                println!("  {label:<22} {value}");
+            }
+        }
+    }
+
+    /// Prints a nested key-value row with 4-space indentation.
+    pub fn print_subrow(&self, label: &str, value: &str) {
+        if !self.quiet {
+            if self.color_enabled {
+                println!("    \x1b[1m{label:<20}\x1b[0m {value}");
+            } else {
+                println!("    {label:<20} {value}");
+            }
+        }
+    }
+
     /// Formats and displays archive test result.
     pub fn print_test_result(&self, result: &ArchiveTestResult) {
         if self.json_mode {
@@ -89,16 +111,19 @@ impl OutputFormatter {
             } else {
                 self.style("FAIL", "\x1b[1;31m")
             };
-            println!("Archive Test: {} [{}]", result.path.display(), status_badge);
-            println!("  Format:   {}", result.format);
+            let sanitized_path =
+                crate::cli::progress::sanitize_terminal_text(&result.path.display().to_string());
+            println!("Archive Test: {sanitized_path} [{status_badge}]");
             let display_message = if result.passed && result.message == "Everything is Ok" {
                 "Integrity verified (all checksums match)"
             } else {
                 &result.message
             };
-            println!("  Status:   {display_message}");
+            let sanitized_status = crate::cli::progress::sanitize_terminal_text(display_message);
+            self.print_row("Format:", &result.format.to_string());
+            self.print_row("Status:", &sanitized_status);
             if let Some(count) = result.entries_checked {
-                println!("  Entries:  {count}");
+                self.print_row("Entries:", &count.to_string());
             }
         }
     }
@@ -112,18 +137,20 @@ impl OutputFormatter {
             );
         } else if !self.quiet {
             let status_badge = self.style("SUCCESS", "\x1b[1;32m");
-            println!(
-                "Archive Extract: {} [{}]",
-                result.archive_path.display(),
-                status_badge
+            let sanitized_path = crate::cli::progress::sanitize_terminal_text(
+                &result.archive_path.display().to_string(),
             );
-            println!("  Destination: {}", result.destination.display());
-            println!("  Format:      {}", result.format);
+            let sanitized_dest = crate::cli::progress::sanitize_terminal_text(
+                &result.destination.display().to_string(),
+            );
+            println!("Archive Extract: {sanitized_path} [{status_badge}]");
+            self.print_row("Destination:", &sanitized_dest);
+            self.print_row("Format:", &result.format.to_string());
             if let Some(entries) = result.entries_extracted {
-                println!("  Entries:     {entries}");
+                self.print_row("Entries:", &entries.to_string());
             }
             if let Some(bytes) = result.total_bytes_extracted {
-                println!("  Extracted:   {}", format_byte_size(bytes));
+                self.print_row("Extracted:", &format_byte_size(bytes));
             }
         }
     }
@@ -133,45 +160,65 @@ impl OutputFormatter {
         if self.json_mode {
             println!("{}", serde_json::to_string_pretty(info).unwrap_or_default());
         } else if !self.quiet {
-            println!("Unarc - Secure Archive Utility");
-            println!("  Version:       {}", info.version);
-            println!("  OS:            {}", info.platform.os);
-            println!("  Architecture:  {}", info.platform.arch);
-            println!("  Apple Silicon: {}", info.platform.is_apple_silicon);
-            println!("  Linux:         {}", info.platform.is_linux);
+            let version = &info.version;
+            println!("Unarc — Secure Archive Utility [v{version}]");
+            println!("  Platform:");
+            let os_desc = if info.platform.is_apple_silicon {
+                format!("{} (Apple Silicon)", info.platform.os)
+            } else if info.platform.is_linux {
+                format!("{} (Linux)", info.platform.os)
+            } else {
+                info.platform.os.clone()
+            };
+            self.print_subrow("Operating System:", &os_desc);
+            self.print_subrow("Architecture:", &info.platform.arch);
+
             println!("  Engine Status:");
-            println!("    Pinned 7-Zip:    v{}", info.engine.pinned_version);
-            println!("    Available:       {}", info.engine.is_available);
-            println!("    Expected SHA256: {}", info.engine.expected_sha256);
+            self.print_subrow("Pinned 7-Zip:", &format!("v{}", info.engine.pinned_version));
+            self.print_subrow("Available:", &info.engine.is_available.to_string());
+            self.print_subrow("Expected SHA-256:", &info.engine.expected_sha256);
             if let Some(ref path) = info.engine.resolved_path {
-                println!("    Binary Path:     {}", path.display());
+                let sanitized_path =
+                    crate::cli::progress::sanitize_terminal_text(&path.display().to_string());
+                self.print_subrow("Binary Path:", &sanitized_path);
             }
+
             if self.verbose {
                 println!("  Platform Capabilities:");
-                println!(
-                    "    Quarantine XAttr Support:   {}",
-                    info.platform.capabilities.supports_quarantine_xattr
+                self.print_subrow(
+                    "Quarantine XAttr:",
+                    &info
+                        .platform
+                        .capabilities
+                        .supports_quarantine_xattr
+                        .to_string(),
                 );
-                println!(
-                    "    POSIX Permission Support:   {}",
-                    info.platform.capabilities.supports_posix_permissions
+                self.print_subrow(
+                    "POSIX Permissions:",
+                    &info
+                        .platform
+                        .capabilities
+                        .supports_posix_permissions
+                        .to_string(),
                 );
-                println!(
-                    "    Sandbox Confinement:        {}",
-                    info.platform.capabilities.supports_sandbox_confinement
+                self.print_subrow(
+                    "Sandbox Confinement:",
+                    &info
+                        .platform
+                        .capabilities
+                        .supports_sandbox_confinement
+                        .to_string(),
                 );
                 println!("  Security Policy Defaults:");
-                println!(
-                    "    Allow Absolute Paths:       {}",
-                    info.policy.allow_absolute_paths
+                self.print_subrow(
+                    "Allow Absolute Paths:",
+                    &info.policy.allow_absolute_paths.to_string(),
                 );
-                println!(
-                    "    Allow Symlinks:             {}",
-                    info.policy.allow_symlinks
-                );
-                println!(
-                    "    Max Path Depth:             {}",
-                    info.policy.max_path_depth
+                self.print_subrow("Allow Symlinks:", &info.policy.allow_symlinks.to_string());
+                self.print_subrow("Max Path Depth:", &info.policy.max_path_depth.to_string());
+                self.print_subrow(
+                    "Max Path Length:",
+                    &format!("{} bytes", info.policy.max_path_length),
                 );
             }
         }
@@ -218,11 +265,13 @@ impl OutputFormatter {
                     self.style("PASS", "\x1b[1;32m")
                 };
 
-                let lines = wrap_message(&check.message, msg_max_width);
+                let sanitized_msg = crate::cli::progress::sanitize_terminal_text(&check.message);
+                let sanitized_name = crate::cli::progress::sanitize_terminal_text(&check.name);
+                let lines = wrap_message(&sanitized_msg, msg_max_width);
                 if lines.len() <= 1 {
-                    println!("    [{badge}] {:<30} {}", check.name, check.message);
+                    println!("    [{badge}] {:<30} {}", sanitized_name, lines[0]);
                 } else {
-                    println!("    [{badge}] {:<30} {}", check.name, lines[0]);
+                    println!("    [{badge}] {:<30} {}", sanitized_name, lines[0]);
                     for line in &lines[1..] {
                         println!("{:prefix_len$}{line}", "");
                     }
@@ -255,10 +304,16 @@ impl OutputFormatter {
             );
         } else if !self.quiet {
             println!("Security Configuration (Zero-Trust Enforcement):");
-            println!("  Allow Absolute Paths:  {}", policy.allow_absolute_paths);
-            println!("  Allow Symlinks:        {}", policy.allow_symlinks);
-            println!("  Max Path Depth:        {}", policy.max_path_depth);
-            println!("  Max Path Length:       {} bytes", policy.max_path_length);
+            self.print_row(
+                "Allow Absolute Paths:",
+                &policy.allow_absolute_paths.to_string(),
+            );
+            self.print_row("Allow Symlinks:", &policy.allow_symlinks.to_string());
+            self.print_row("Max Path Depth:", &policy.max_path_depth.to_string());
+            self.print_row(
+                "Max Path Length:",
+                &format!("{} bytes", policy.max_path_length),
+            );
         }
     }
 
@@ -274,9 +329,12 @@ impl OutputFormatter {
             println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
         } else if !self.quiet {
             println!("Engine Update Status:");
-            println!("  Pinned Version:   v{}", engine.pinned_version);
-            println!("  Source Release:   {}", engine.release_url);
-            println!("  Policy:           Hermetic & pinned at build-time. Dynamic runtime updates are disabled.");
+            self.print_row("Pinned Version:", &format!("v{}", engine.pinned_version));
+            self.print_row("Source Release:", &engine.release_url);
+            self.print_row(
+                "Policy:",
+                "Hermetic & pinned at build-time. Dynamic runtime updates are disabled.",
+            );
         }
     }
 
@@ -294,17 +352,20 @@ impl OutputFormatter {
                 self.style("UP TO DATE", "\x1b[1;32m")
             };
             println!("Self-Update Check: [{status_badge}]");
-            println!("  Current Version:  v{}", result.current_version);
-            println!("  Latest Version:   v{}", result.latest_version);
-            println!(
-                "  Target Platform:  {}-{}",
-                result.manifest.target_os, result.manifest.target_arch
+            self.print_row("Current Version:", &format!("v{}", result.current_version));
+            self.print_row("Latest Version:", &format!("v{}", result.latest_version));
+            self.print_row(
+                "Target Platform:",
+                &format!(
+                    "{}-{}",
+                    result.manifest.target_os, result.manifest.target_arch
+                ),
             );
-            println!(
-                "  Bundled 7-Zip:    v{}",
-                result.manifest.bundled_7zz_version
+            self.print_row(
+                "Bundled 7-Zip:",
+                &format!("v{}", result.manifest.bundled_7zz_version),
             );
-            println!("  Artifact SHA-256: {}", result.manifest.artifact_sha256);
+            self.print_row("Artifact SHA-256:", &result.manifest.artifact_sha256);
             if result.update_available {
                 println!("\nRun 'unarc update' to download, verify, and apply this update.");
             }
@@ -320,17 +381,65 @@ impl OutputFormatter {
             );
         } else if !self.quiet {
             let status_badge = self.style("SUCCESS", "\x1b[1;32m");
+            let sanitized_path = crate::cli::progress::sanitize_terminal_text(
+                &result.binary_path.display().to_string(),
+            );
             println!("Self-Update Installed: [{status_badge}]");
-            println!("  Previous Version: v{}", result.previous_version);
-            println!("  New Version:      v{}", result.new_version);
-            println!("  Installed Binary: {}", result.binary_path.display());
-            println!(
-                "  Verification:     Ed25519 signature & SHA-256 checksum verified authentic."
+            self.print_row(
+                "Previous Version:",
+                &format!("v{}", result.previous_version),
+            );
+            self.print_row("New Version:", &format!("v{}", result.new_version));
+            self.print_row("Installed Binary:", &sanitized_path);
+            self.print_row(
+                "Verification:",
+                "Ed25519 signature & SHA-256 checksum verified authentic.",
             );
         }
     }
 
-    /// Formats and displays error message.
+    /// Formats and displays interactive slash commands help reference.
+    pub fn print_help(&self) {
+        if self.json_mode {
+            let commands: Vec<_> = crate::cli::interactive::SUGGESTIONS
+                .iter()
+                .map(|s| {
+                    json!({
+                        "command": s.command,
+                        "description": s.description
+                    })
+                })
+                .collect();
+            let val = json!({
+                "commands": commands
+            });
+            println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+        } else if !self.quiet {
+            println!("Interactive Command Reference:");
+            for item in crate::cli::interactive::SUGGESTIONS {
+                if self.color_enabled {
+                    println!("  \x1b[1m{:<12}\x1b[0m {}", item.command, item.description);
+                } else {
+                    println!("  {:<12} {}", item.command, item.description);
+                }
+            }
+            println!("\n  Tips:");
+            self.print_subrow(
+                "Direct run:",
+                "Type '/extract <path>' or drag-and-drop an archive file.",
+            );
+            self.print_subrow(
+                "Navigation:",
+                "Use Up/Down arrows to select, Tab to autocomplete, Esc to clear.",
+            );
+            self.print_subrow(
+                "CLI help:",
+                "Run 'unarc --help' from the shell for standard command-line flags.",
+            );
+        }
+    }
+
+    /// Formats and displays error message with contextual hints.
     pub fn print_error(&self, error: &UnarcError) {
         let code = error.code();
         if self.json_mode {
@@ -342,11 +451,51 @@ impl OutputFormatter {
             });
             eprintln!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
         } else {
-            eprintln!("error [{}]: {error}", code.as_str());
+            let sanitized_msg = crate::cli::progress::sanitize_terminal_text(&error.to_string());
+            if self.color_enabled {
+                eprintln!(
+                    "\x1b[1;31merror\x1b[0m \x1b[90m[{}]\x1b[0m: {sanitized_msg}",
+                    code.as_str()
+                );
+            } else {
+                eprintln!("error [{}]: {sanitized_msg}", code.as_str());
+            }
+            if let Some(hint) = error_hint(code) {
+                if self.color_enabled {
+                    eprintln!("  \x1b[1mHint:\x1b[0m {hint}");
+                } else {
+                    eprintln!("  Hint: {hint}");
+                }
+            }
             if self.verbose {
                 eprintln!("  Diagnostic detail: exit_code={}", error.exit_code());
             }
         }
+    }
+}
+
+/// Returns an actionable user-facing hint for a given error code, if available.
+#[must_use]
+pub fn error_hint(code: crate::error::ErrorCode) -> Option<&'static str> {
+    use crate::error::ErrorCode::*;
+    match code {
+        InputNotFound => Some("Verify that the archive path exists and is spelled correctly."),
+        InputNotFile => Some("Target path is a directory or special device, not an archive file."),
+        UnsupportedFormat => Some("The archive format is unrecognized or unsupported."),
+        MissingVolume => Some("Ensure all multi-part volume files (.part1, .part2, .z01, etc.) are in the same folder."),
+        InvalidVolume => Some("A multi-part volume appears corrupt, mismatched, or truncated."),
+        CorruptArchive => Some("The archive header or data failed verification."),
+        PasswordRequired => Some("Provide a password using interactive prompt or '--password' / 'UNARC_PASSWORD'."),
+        InvalidPassword => Some("The provided password could not decrypt the archive."),
+        OutputInvalid => Some("Check that destination is a valid directory path and not an existing non-directory file."),
+        PathTraversal => Some("Refused extraction due to unsafe paths breakout (../) outside destination directory."),
+        UnsafeEntry => Some("Refused extraction of unsafe archive content (e.g. absolute symlink or device node)."),
+        SecurityPolicyViolation => Some("Operation violates active security policy boundaries (e.g. symlinks disallowed)."),
+        PermissionDenied => Some("Check filesystem permissions for read access to the archive and write access to destination."),
+        ExtractionFailed => Some("Decompression aborted or failed during archive processing."),
+        EngineFailed => Some("Run 'unarc doctor' to verify engine binary integrity and platform diagnostics."),
+        Interrupted => Some("Operation was cancelled by user signal."),
+        CliError => Some("Run 'unarc --help' to see valid command syntax and options."),
     }
 }
 
@@ -455,5 +604,43 @@ mod tests {
         for line in &wrapped {
             assert!(line.len() <= 28);
         }
+    }
+
+    #[test]
+    fn test_error_hints_coverage() {
+        use crate::error::ErrorCode::*;
+        let all_codes = [
+            InputNotFound,
+            InputNotFile,
+            UnsupportedFormat,
+            MissingVolume,
+            InvalidVolume,
+            CorruptArchive,
+            PasswordRequired,
+            InvalidPassword,
+            OutputInvalid,
+            PathTraversal,
+            UnsafeEntry,
+            SecurityPolicyViolation,
+            PermissionDenied,
+            ExtractionFailed,
+            EngineFailed,
+            Interrupted,
+            CliError,
+        ];
+        for code in all_codes {
+            assert!(
+                error_hint(code).is_some(),
+                "Error code {code:?} missing actionable hint"
+            );
+        }
+    }
+
+    #[test]
+    fn test_output_formatter_row_printing() {
+        let fmt = OutputFormatter::new(false, false, false);
+        // Just verify print_row and print_subrow do not panic
+        fmt.print_row("Test Label:", "Test Value");
+        fmt.print_subrow("Sub Label:", "Sub Value");
     }
 }

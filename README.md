@@ -69,18 +69,18 @@ Unarc is distributed as a **single, self-contained native executable** for suppo
 ### Quick Download & Run (Manual)
 1. Go to [GitHub Releases (Latest)](https://github.com/mosabbir-maruf/Unarc/releases/latest).
 2. Download the standalone executable for your operating system:
-   - `unarc-0.2.1-macos-arm64` (macOS Apple Silicon)
-   - `unarc-0.2.1-linux-x86_64` (Linux 64-bit Intel/AMD)
-   - `unarc-0.2.1-linux-aarch64` (Linux 64-bit ARM)
+   - `unarc-0.2.2-macos-arm64` (macOS Apple Silicon)
+   - `unarc-0.2.2-linux-x86_64` (Linux 64-bit Intel/AMD)
+   - `unarc-0.2.2-linux-aarch64` (Linux 64-bit ARM)
 3. Make it executable and run:
    ```bash
-   chmod +x unarc-0.2.1-macos-arm64
-   ./unarc-0.2.1-macos-arm64
+   chmod +x unarc-0.2.2-macos-arm64
+   ./unarc-0.2.2-macos-arm64
    ```
 4. *(Optional)* Move it to your `PATH` (such as `~/.local/bin/unarc`) to run from any terminal:
    ```bash
    mkdir -p ~/.local/bin
-   mv unarc-0.2.1-macos-arm64 ~/.local/bin/unarc
+   mv unarc-0.2.2-macos-arm64 ~/.local/bin/unarc
    chmod 0755 ~/.local/bin/unarc
    unarc
    ```
@@ -96,7 +96,7 @@ You can download and verify the standalone executable directly from your shell:
 PLATFORM="macos-arm64"
 
 # 2. Check the latest release tag at https://github.com/mosabbir-maruf/Unarc/releases/latest
-VERSION="0.2.1"
+VERSION="0.2.2"
 
 # 3. Download the standalone executable and SHA-256 checksum
 curl -sSLO "https://github.com/mosabbir-maruf/Unarc/releases/download/v${VERSION}/unarc-${VERSION}-${PLATFORM}"
@@ -121,6 +121,37 @@ unarc doctor
 
 > [!TIP]
 > Ensure `~/.local/bin` is in your `PATH` (e.g., `export PATH="$HOME/.local/bin:$PATH"` in `~/.zshrc` or `~/.bashrc`).
+
+### macOS Gatekeeper — First Run
+
+When downloading standalone executables via a web browser or `curl` on macOS, Apple's Gatekeeper subsystem attaches an extended quarantine attribute (`com.apple.quarantine`). Because current releases are unsigned/unnotarized open-source binaries rather than signed with an Apple Developer ID certificate, macOS may present a dialog stating:
+> *"unarc cannot be opened because the developer cannot be verified."*
+
+*(Note: This is only required for the current unsigned/unnotarized release; it removes quarantine only from that specific file. Future Developer ID signed and notarized releases will not require this workaround.)*
+
+#### Documented First-Run Flow
+
+1. **Verify the official SHA-256 digest**:
+   ```bash
+   shasum -a 256 -c unarc-0.2.2-macos-arm64.sha256
+   ```
+2. **Remove quarantine only from the downloaded executable**:
+   ```bash
+   # In your download folder:
+   xattr -d com.apple.quarantine ./unarc-0.2.2-macos-arm64
+
+   # Or if installed to ~/.local/bin/unarc:
+   xattr -d com.apple.quarantine ~/.local/bin/unarc
+   ```
+3. **Run the executable**:
+   ```bash
+   ./unarc-0.2.2-macos-arm64 version
+   # or
+   unarc doctor
+   ```
+
+> [!CAUTION]
+> **Never disable Gatekeeper globally** (e.g. `spctl --master-disable`). Always remove the quarantine attribute targeting *only* the specific verified Unarc executable file after confirming its SHA-256 checksum.
 
 ---
 
@@ -388,10 +419,11 @@ CID=$(docker create zricethezav/gitleaks:latest detect --source /repo --verbose 
 ## Troubleshooting
 
 ### 1. macOS Gatekeeper / Quarantine Alert
-If macOS blocks execution of downloaded binaries with an alert stating the developer cannot be verified:
+If macOS blocks execution of downloaded binaries with an alert stating the developer cannot be verified, verify the official SHA-256 checksum and remove the quarantine attribute from the executable:
 ```bash
 xattr -d com.apple.quarantine ~/.local/bin/unarc
 ```
+For detailed first-run instructions, security rationale, and safety warnings, see [macOS Gatekeeper — First Run](#macos-gatekeeper--first-run).
 
 ### 2. Docker Volume Permissions
 - Ensure Docker Desktop has permission to access your host directory (Docker Settings -> Resources -> File Sharing).

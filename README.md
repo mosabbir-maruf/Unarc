@@ -130,11 +130,33 @@ Follow this onboarding runbook after installing Unarc.
 
 ### Verify Installation
 
-Confirm that Unarc is installed and passes diagnostics:
+Confirm that Unarc is installed and inspect system diagnostics:
 
 ```bash
 unarc version
+```
+
+Expected result:
+```text
+unarc 0.2.2
+```
+
+Run doctor diagnostics to verify engine integrity and platform capabilities:
+
+```bash
 unarc doctor
+```
+
+Expected result:
+```text
+System Diagnostics Doctor: [HEALTHY]
+  Platform:       macos-aarch64 (or linux-x86_64 / linux-aarch64)
+  Pinned Engine:  v26.03
+  Diagnostic Probes:
+    [PASS] Platform Detection
+    [PASS] Bundled Engine Resolution
+    [PASS] Engine Execution Probe
+    ...
 ```
 
 ### macOS Gatekeeper — First Run
@@ -145,7 +167,7 @@ When downloading standalone binaries on macOS via browser or `curl`, Apple's Gat
    ```bash
    shasum -a 256 -c unarc-0.2.2-macos-arm64.sha256
    ```
-2. **Clear the quarantine attribute from the verified binary**:
+2. **Clear the quarantine attribute only from the verified Unarc binary**:
    ```bash
    # If running from download directory:
    xattr -d com.apple.quarantine ./unarc-0.2.2-macos-arm64
@@ -153,7 +175,7 @@ When downloading standalone binaries on macOS via browser or `curl`, Apple's Gat
    # If installed to PATH:
    xattr -d com.apple.quarantine ~/.local/bin/unarc
    ```
-3. **Run the executable**:
+3. **Run the executable and verify it works**:
    ```bash
    ./unarc-0.2.2-macos-arm64 version
    # or
@@ -163,9 +185,30 @@ When downloading standalone binaries on macOS via browser or `curl`, Apple's Gat
 > [!CAUTION]
 > **Never disable Gatekeeper globally** (e.g. `spctl --master-disable`). Only clear the quarantine attribute on the specific verified Unarc binary.
 
-#### Restore Gatekeeper Quarantine
+### Start Using Unarc
 
-Removing `com.apple.quarantine` is only a temporary workaround for running the unsigned/unnotarized release. After finishing, you can restore the quarantine attribute:
+Launch Unarc without arguments to enter interactive mode:
+
+```bash
+unarc
+```
+
+Or extract an archive directly:
+
+```bash
+unarc extract archive.zip --output ./out
+```
+
+---
+
+## Restore Gatekeeper Quarantine
+
+Restoring the Gatekeeper quarantine attribute is an optional post-use action:
+- **Optional**: Intended for users who temporarily removed `com.apple.quarantine` to run the current unsigned/unnotarized release.
+- **Targeted**: Restores the quarantine attribute specifically on the verified Unarc binary.
+- **Not System-Wide**: This is **not** a global Gatekeeper restore or enable operation (`spctl` settings are untouched).
+
+Re-apply the quarantine attribute:
 
 ```bash
 # If installed to PATH:
@@ -187,20 +230,6 @@ com.apple.quarantine: 0083;...;Unarc;
 ```
 
 If `com.apple.quarantine` is present, the quarantine attribute has been restored.
-
-### Start Using Unarc
-
-Launch Unarc without arguments to enter interactive mode:
-
-```bash
-unarc
-```
-
-Or extract an archive directly:
-
-```bash
-unarc extract archive.zip --output ./out
-```
 
 ---
 
@@ -243,6 +272,19 @@ unarc ›
 - `--json`: Formats output as structured JSON.
 - `-v, --verbose`: Increases output verbosity.
 - `-q, --quiet`: Suppresses non-essential terminal output.
+
+#### Self-Update (`unarc update` / `/update`)
+
+Unarc provides a cryptographically authenticated self-update mechanism for native installations:
+
+- **What It Downloads**: Downloads the standalone executable binary directly from GitHub Releases (e.g. `unarc-<version>-macos-arm64` on Apple Silicon). It does **not** download Docker container images or archive tarballs.
+- **Docker Updates**: Docker environments do not use `unarc update`; update by pulling the latest container image (`docker pull ghcr.io/mosabbir-maruf/unarc:latest`).
+- **Cryptographic Verification**: Before replacing any executable, Unarc fetches the release manifest, verifies its Ed25519 signature against the embedded official public key (`90cd97db...`), validates host architecture compatibility, verifies the downloaded binary's SHA-256 hash against the manifest, and validates Mach-O/ELF binary format headers.
+- **Atomic Replacement & Rollback**: Stages the verified binary alongside the running executable and applies it via atomic POSIX `rename(2)`. If network transfer, signature verification, checksum validation, or format checks fail, the temporary staging file is deleted immediately and the existing binary remains unchanged. Updates through symlinks are rejected for security.
+- **Execution Modes**:
+  - `unarc update --check`: Checks for updates and reports availability without downloading or replacing the binary.
+  - `unarc update`: Checks, downloads, verifies, and installs the update.
+  - Interactive TUI (`/update`): Checks for updates and prompts for confirmation (`[y/N]`) before applying.
 
 ---
 
@@ -387,7 +429,7 @@ Unarc operates with a strict zero-telemetry, zero-persistence model:
 - **No Telemetry**: Collects zero analytics, metrics, or usage tracking.
 - **No Persistent Credentials**: Never saves passwords to disk, caches, keychain, configuration files, or logs.
 - **Air-Gapped & Offline**: Operates completely self-contained without cloud or backend dependencies.
-- **Zero Runtime Downloads**: Never fetches binaries or dependencies over the network at runtime.
+- **Zero Runtime Downloads for Archive Operations**: Core archive operations (extract, test, info, doctor) never fetch binaries, engines, or dependencies over the network at runtime. (Self-update via `unarc update` connects to GitHub Releases only when explicitly invoked by the user.)
 - **Ephemeral Operation Data**: Cleans temporary operation data (such as isolated sandbox staging workspaces) upon operation completion.
 
 ### License & Third-Party Notices

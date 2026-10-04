@@ -41,12 +41,12 @@ fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set"));
     let target = env::var("TARGET").unwrap_or_default();
-    let profile = env::var("PROFILE").unwrap_or_default();
 
+    let explicit_path_set = env::var("UNARC_EMBED_7ZZ_PATH").is_ok();
     let require_embedded = env::var("UNARC_REQUIRE_EMBEDDED_7ZZ")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
-        || profile == "release";
+        || explicit_path_set;
 
     let expected_sha = expected_sha256_for_target(&target);
 

@@ -41,6 +41,7 @@ jobs:
       - name: Build release binaries
         env:
           UNARC_EMBED_7ZZ_PATH: target/release/7zz
+          UNARC_REQUIRE_EMBEDDED_7ZZ: "1"
         run: cargo build --release --target aarch64-apple-darwin
 
       - name: Stage native binaries

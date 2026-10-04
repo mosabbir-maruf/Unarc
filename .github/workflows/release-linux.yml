@@ -55,6 +55,7 @@ jobs:
       - name: Build release binaries
         env:
           UNARC_EMBED_7ZZ_PATH: target/release/7zz
+          UNARC_REQUIRE_EMBEDDED_7ZZ: "1"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Stage native binaries

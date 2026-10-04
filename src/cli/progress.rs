@@ -343,12 +343,7 @@ impl ProgressBar {
         );
 
         if let Some(ref l2) = line2_styled {
-            let _ = write!(
-                out,
-                "\n\x1b[2K{:width$}{l2}",
-                "",
-                width = self.left_margin
-            );
+            let _ = write!(out, "\n\x1b[2K{:width$}{l2}", "", width = self.left_margin);
             self.rendered_lines = 2;
         } else {
             self.rendered_lines = 1;

@@ -169,14 +169,13 @@ pub fn run_with_cli_and_prompter<P: PasswordPrompter>(cli: Cli, prompter: &P) ->
         }
         Some(Commands::Test(args)) => {
             let show_progress = formatter.should_show_progress();
-            let res =
-                match run_test_with_prompt(&app, &args.archive, prompter, show_progress, 0) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        formatter.print_error(&e);
-                        return Err(e);
-                    }
-                };
+            let res = match run_test_with_prompt(&app, &args.archive, prompter, show_progress, 0) {
+                Ok(r) => r,
+                Err(e) => {
+                    formatter.print_error(&e);
+                    return Err(e);
+                }
+            };
             formatter.print_test_result(&res);
             Ok(())
         }

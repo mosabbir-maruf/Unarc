@@ -69,18 +69,18 @@ Unarc is distributed as a **single, self-contained native executable** for suppo
 ### Quick Download & Run (Manual)
 1. Go to [GitHub Releases (Latest)](https://github.com/mosabbir-maruf/Unarc/releases/latest).
 2. Download the standalone executable for your operating system:
-   - `unarc-0.2.0-macos-arm64` (macOS Apple Silicon)
-   - `unarc-0.2.0-linux-x86_64` (Linux 64-bit Intel/AMD)
-   - `unarc-0.2.0-linux-aarch64` (Linux 64-bit ARM)
+   - `unarc-0.2.1-macos-arm64` (macOS Apple Silicon)
+   - `unarc-0.2.1-linux-x86_64` (Linux 64-bit Intel/AMD)
+   - `unarc-0.2.1-linux-aarch64` (Linux 64-bit ARM)
 3. Make it executable and run:
    ```bash
-   chmod +x unarc-0.2.0-macos-arm64
-   ./unarc-0.2.0-macos-arm64
+   chmod +x unarc-0.2.1-macos-arm64
+   ./unarc-0.2.1-macos-arm64
    ```
 4. *(Optional)* Move it to your `PATH` (such as `~/.local/bin/unarc`) to run from any terminal:
    ```bash
    mkdir -p ~/.local/bin
-   mv unarc-0.2.0-macos-arm64 ~/.local/bin/unarc
+   mv unarc-0.2.1-macos-arm64 ~/.local/bin/unarc
    chmod 0755 ~/.local/bin/unarc
    unarc
    ```
@@ -96,7 +96,7 @@ You can download and verify the standalone executable directly from your shell:
 PLATFORM="macos-arm64"
 
 # 2. Check the latest release tag at https://github.com/mosabbir-maruf/Unarc/releases/latest
-VERSION="0.2.0"
+VERSION="0.2.1"
 
 # 3. Download the standalone executable and SHA-256 checksum
 curl -sSLO "https://github.com/mosabbir-maruf/Unarc/releases/download/v${VERSION}/unarc-${VERSION}-${PLATFORM}"

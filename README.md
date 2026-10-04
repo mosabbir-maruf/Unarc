@@ -38,6 +38,12 @@ Unarc is distributed as a single, self-contained native executable embedding the
 
 2. Make executable and run directly, or install into your `PATH`:
    ```bash
+   # If running from the download directory:
+   xattr -d com.apple.quarantine ./unarc-0.2.5-macos-arm64
+
+   # If installed to PATH:
+   xattr -d com.apple.quarantine ~/.local/bin/unarc
+
    # Make executable and run directly:
    chmod +x ./unarc-0.2.5-macos-arm64
    ./unarc-0.2.5-macos-arm64
@@ -46,12 +52,6 @@ Unarc is distributed as a single, self-contained native executable embedding the
    mkdir -p ~/.local/bin
    mv ./unarc-0.2.5-macos-arm64 ~/.local/bin/unarc
    unarc
-
-   # If running from the download directory:
-   xattr -d com.apple.quarantine ./unarc-0.2.5-macos-arm64
-
-   # If installed to PATH:
-   xattr -d com.apple.quarantine ~/.local/bin/unarc
    ```
 
 > [!TIP]

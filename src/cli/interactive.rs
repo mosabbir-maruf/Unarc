@@ -131,6 +131,170 @@ pub fn filter_suggestions(input: &str) -> Vec<&'static CommandSuggestion> {
         .collect()
 }
 
+/// Determines if an input string is targeting the command palette rather than a filesystem path.
+/// Command palette inputs start with a leading slash and do not contain path separators (`/` or `\`)
+/// or spaces afterwards (e.g. `/`, `/ex`, `/extract`, `/help`).
+#[must_use]
+pub fn is_command_palette_input(input: &str) -> bool {
+    let clean = input.trim();
+    if !clean.starts_with('/') {
+        return false;
+    }
+    // Any second slash or backslash indicates a filesystem path (e.g. /Users/..., /tmp/...)
+    if clean[1..].contains('/') || clean.contains('\\') {
+        return false;
+    }
+    // Command palette inputs do not contain whitespace
+    if clean.contains(' ') {
+        return false;
+    }
+    true
+}
+
+/// Finds supported archive files directly inside a directory (single level, bounded non-recursive scan).
+/// Returns a sorted list of paths so multi-part archives (.part01.rar, .001, etc.) have part 1 first.
+#[must_use]
+pub fn find_archives_in_directory(dir: &Path) -> Vec<PathBuf> {
+    let mut archives = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for (i, entry) in entries.flatten().enumerate() {
+            if i >= 256 {
+                break;
+            }
+            let path = entry.path();
+            if path.is_file() && ArchiveFormat::from_extension(&path).is_some() {
+                archives.push(path);
+                if archives.len() >= 64 {
+                    break;
+                }
+            }
+        }
+    }
+    archives.sort();
+    archives
+}
+
+/// Resolves a target path: if it is a directory, finds the primary archive within it.
+/// Returns Ok(archive_path) if resolved, or Err(display_name) if directory contains no archives.
+pub fn resolve_archive_or_directory(path: &Path) -> std::result::Result<PathBuf, String> {
+    if path.is_dir() {
+        let archives = find_archives_in_directory(path);
+        if let Some(first) = archives.first() {
+            Ok(first.clone())
+        } else {
+            Err(path.display().to_string())
+        }
+    } else {
+        Ok(path.to_path_buf())
+    }
+}
+
+/// Resolves a raw candidate string to a `PathBuf`, unescaping drag-and-drop artifacts
+/// and expanding `~` to the home directory if present.
+#[must_use]
+pub fn resolve_candidate_path(input: &str) -> PathBuf {
+    let clean = clean_terminal_path(input);
+    if clean.starts_with("~/") || clean == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            if clean == "~" {
+                return PathBuf::from(home);
+            }
+            return PathBuf::from(home).join(&clean[2..]);
+        }
+    }
+    PathBuf::from(clean)
+}
+
+/// Checks if an input string syntactically or structurally resembles a filesystem path.
+#[must_use]
+pub fn looks_like_path(s: &str) -> bool {
+    let clean = s.trim();
+    if clean.is_empty() {
+        return false;
+    }
+    clean.starts_with('/')
+        || clean.starts_with("./")
+        || clean.starts_with("../")
+        || clean.starts_with("~/")
+        || clean.contains('/')
+        || clean.contains('\\')
+        || clean.ends_with(".zip")
+        || clean.ends_with(".rar")
+        || clean.ends_with(".7z")
+        || clean.ends_with(".tar")
+        || clean.ends_with(".gz")
+        || clean.ends_with(".bz2")
+        || clean.ends_with(".xz")
+        || clean.ends_with(".zst")
+        || clean.ends_with(".iso")
+        || Path::new(clean).exists()
+}
+
+/// Classified status of an input candidate path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathCandidate {
+    /// A single supported archive file.
+    ArchiveFile {
+        path: PathBuf,
+        format: ArchiveFormat,
+    },
+    /// A directory containing one or more supported archive files.
+    ArchiveInDirectory {
+        directory: PathBuf,
+        primary_archive: PathBuf,
+        total_archives: usize,
+        format: ArchiveFormat,
+    },
+    /// A directory containing no supported archive files.
+    EmptyDirectory(PathBuf),
+    /// A regular file with an unsupported format.
+    UnsupportedFile(PathBuf),
+    /// A path that resembles a filesystem path but does not exist on disk.
+    NotFound(PathBuf),
+    /// An input that is not a filesystem path (e.g. command or arbitrary text).
+    NotAPath,
+}
+
+/// Inspects and classifies an input candidate string against the filesystem.
+#[must_use]
+pub fn inspect_path_candidate(input: &str) -> PathCandidate {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return PathCandidate::NotAPath;
+    }
+
+    // Command palette inputs (e.g. "/", "/help", "/extract") take precedence over paths
+    if is_command_palette_input(trimmed) {
+        return PathCandidate::NotAPath;
+    }
+
+    let path = resolve_candidate_path(trimmed);
+    if path.is_file() {
+        if let Some(format) = ArchiveFormat::from_extension(&path) {
+            PathCandidate::ArchiveFile { path, format }
+        } else {
+            PathCandidate::UnsupportedFile(path)
+        }
+    } else if path.is_dir() {
+        let archives = find_archives_in_directory(&path);
+        if let Some(primary) = archives.first() {
+            let format = ArchiveFormat::from_extension(primary).unwrap_or(ArchiveFormat::Zip);
+            PathCandidate::ArchiveInDirectory {
+                directory: path,
+                primary_archive: primary.clone(),
+                total_archives: archives.len(),
+                format,
+            }
+        } else {
+            PathCandidate::EmptyDirectory(path)
+        }
+    } else if looks_like_path(trimmed) {
+        PathCandidate::NotFound(path)
+    } else {
+        PathCandidate::NotAPath
+    }
+}
+
 /// Action options when an archive file is detected in the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveAction {
@@ -497,34 +661,75 @@ pub fn generate_dashboard_rows(
         screen_rows.push(String::new());
     }
 
-    // 2. Check Archive Candidate
-    let candidate_str = clean_terminal_path(state.buffer.trim());
-    let candidate_path = PathBuf::from(&candidate_str);
-    let is_archive_detected = !candidate_str.is_empty()
-        && candidate_path.is_file()
-        && ArchiveFormat::from_extension(&candidate_path).is_some();
+    // 2. Check Candidate Status
+    let candidate_status = inspect_path_candidate(state.buffer);
+    let is_archive_detected = matches!(
+        candidate_status,
+        PathCandidate::ArchiveFile { .. } | PathCandidate::ArchiveInDirectory { .. }
+    );
 
     // 3. Operation / State Title (Centered)
-    if is_archive_detected {
-        let format_name = ArchiveFormat::from_extension(&candidate_path).unwrap();
-        let sub = format!("({format_name} Archive)");
-        screen_rows.extend(render_operation_title(
-            "Archive Detected",
-            Some(&sub),
-            &layout,
-        ));
-    } else if state.buffer.starts_with('/') && !state.buffer.contains(' ') {
-        screen_rows.extend(render_operation_title(
-            "Command Palette",
-            Some("(/help for reference)"),
-            &layout,
-        ));
-    } else {
-        screen_rows.extend(render_operation_title(
-            "Archive Utility",
-            Some("(Drop archive or enter path)"),
-            &layout,
-        ));
+    match &candidate_status {
+        PathCandidate::ArchiveFile { format, .. } => {
+            let sub = format!("({format} Archive)");
+            screen_rows.extend(render_operation_title(
+                "Archive Detected",
+                Some(&sub),
+                &layout,
+            ));
+        }
+        PathCandidate::ArchiveInDirectory {
+            total_archives,
+            format,
+            ..
+        } => {
+            let sub = if *total_archives > 1 {
+                format!("({total_archives} Archives in Folder)")
+            } else {
+                format!("({format} Archive in Folder)")
+            };
+            screen_rows.extend(render_operation_title(
+                "Archive Detected",
+                Some(&sub),
+                &layout,
+            ));
+        }
+        PathCandidate::EmptyDirectory(_) => {
+            screen_rows.extend(render_operation_title(
+                "Directory Detected",
+                Some("(No Archives Found)"),
+                &layout,
+            ));
+        }
+        PathCandidate::UnsupportedFile(_) => {
+            screen_rows.extend(render_operation_title(
+                "File Detected",
+                Some("(Unsupported Format)"),
+                &layout,
+            ));
+        }
+        PathCandidate::NotFound(_) => {
+            screen_rows.extend(render_operation_title(
+                "Path Not Found",
+                Some("(Verify Path)"),
+                &layout,
+            ));
+        }
+        PathCandidate::NotAPath => {
+            if is_command_palette_input(state.buffer) {
+                screen_rows.extend(render_operation_title(
+                    "Command Palette",
+                    Some("(/help for reference)"),
+                    &layout,
+                ));
+            } else {
+                screen_rows.extend(render_operation_title(
+                    "Archive Utility",
+                    Some("(Drop archive or enter path)"),
+                    &layout,
+                ));
+            }
+        }
     }
 
     if !compact {
@@ -536,239 +741,431 @@ pub fn generate_dashboard_rows(
     let mut cursor_y: usize = if compact { 7 } else { 9 };
     let mut hide_cursor = false;
 
-    if is_archive_detected {
-        hide_cursor = true;
-        let filename = candidate_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let format_name = ArchiveFormat::from_extension(&candidate_path).unwrap();
-        let size_bytes = std::fs::metadata(&candidate_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let size_str = crate::cli::output::format_byte_size(size_bytes);
+    match &candidate_status {
+        PathCandidate::ArchiveFile { path, format } => {
+            hide_cursor = true;
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            let size_str = crate::cli::output::format_byte_size(size_bytes);
 
-        let sanitized_name = crate::cli::progress::sanitize_terminal_text(&filename);
-        let sanitized_path = crate::cli::progress::sanitize_terminal_text(&candidate_str);
-        let max_val_w = layout.content_width.saturating_sub(14);
-        let disp_name = truncate_chars(&sanitized_name, max_val_w);
-        let disp_path = crate::cli::progress::truncate_filename(&sanitized_path, max_val_w);
+            let sanitized_name = crate::cli::progress::sanitize_terminal_text(&filename);
+            let sanitized_path =
+                crate::cli::progress::sanitize_terminal_text(&path.display().to_string());
+            let max_val_w = layout.content_width.saturating_sub(14);
+            let disp_name = truncate_chars(&sanitized_name, max_val_w);
+            let disp_path = crate::cli::progress::truncate_filename(&sanitized_path, max_val_w);
 
-        let section_lbl = if state.color_enabled {
-            layout.row("\x1b[1;37mArchive Details\x1b[0m")
-        } else {
-            layout.row("Archive Details")
-        };
-        screen_rows.push(section_lbl);
-
-        for (lbl, val) in [
-            ("File:", disp_name.as_str()),
-            ("Format:", &format!("{format_name} Archive")),
-            ("Size:", size_str.as_str()),
-            ("Location:", disp_path.as_str()),
-        ] {
-            let line = if state.color_enabled {
-                format!("  \x1b[90m{:<10}\x1b[0m \x1b[1;37m{val}\x1b[0m", lbl)
+            let section_lbl = if state.color_enabled {
+                layout.row("\x1b[1;37mArchive Details\x1b[0m")
             } else {
-                format!("  {:<10} {val}", lbl)
+                layout.row("Archive Details")
             };
-            screen_rows.push(layout.row(&line));
-        }
+            screen_rows.push(section_lbl);
 
-        if !compact {
-            screen_rows.push(String::new());
-        }
-
-        let action_lbl = if state.color_enabled {
-            layout.row("\x1b[1;37mAction\x1b[0m")
-        } else {
-            layout.row("Action")
-        };
-        screen_rows.push(action_lbl);
-
-        for (act, label) in [
-            (ArchiveAction::Extract, "[E]xtract archive"),
-            (ArchiveAction::Test, "[T]est integrity"),
-            (ArchiveAction::Cancel, "[C]ancel"),
-        ] {
-            let is_focused = state.archive_action == act;
-            let row_str = if is_focused {
-                if state.color_enabled {
-                    format!("  \x1b[1;36m›\x1b[0m \x1b[1;37m{label}\x1b[0m")
+            for (lbl, val) in [
+                ("File:", disp_name.as_str()),
+                ("Format:", &format!("{format} Archive")),
+                ("Size:", size_str.as_str()),
+                ("Location:", disp_path.as_str()),
+            ] {
+                let line = if state.color_enabled {
+                    format!("  \x1b[90m{:<10}\x1b[0m \x1b[1;37m{val}\x1b[0m", lbl)
                 } else {
-                    format!("  > {label}")
-                }
-            } else if state.color_enabled {
-                format!("    \x1b[90m{label}\x1b[0m")
+                    format!("  {:<10} {val}", lbl)
+                };
+                screen_rows.push(layout.row(&line));
+            }
+
+            if !compact {
+                screen_rows.push(String::new());
+            }
+
+            let action_lbl = if state.color_enabled {
+                layout.row("\x1b[1;37mAction\x1b[0m")
             } else {
-                format!("    {label}")
+                layout.row("Action")
             };
-            screen_rows.push(layout.row(&row_str));
-        }
-    } else if state.buffer.starts_with('/') && !state.buffer.contains(' ') {
-        let max_disp_buf = layout.content_width.saturating_sub(6);
-        let disp_buf = truncate_chars(state.buffer, max_disp_buf);
+            screen_rows.push(action_lbl);
 
-        let prompt_lbl = if state.color_enabled {
-            layout.row("\x1b[1;37mCommand:\x1b[0m")
-        } else {
-            layout.row("Command:")
-        };
-        screen_rows.push(prompt_lbl);
-
-        let prompt_sym = if state.color_enabled {
-            "\x1b[1;36m›\x1b[0m"
-        } else {
-            ">"
-        };
-        screen_rows.push(layout.row(&format!("{prompt_sym} {disp_buf}")));
-        cursor_x = layout.left_margin + 2 + disp_buf.chars().count();
-        cursor_y = screen_rows.len().saturating_sub(1);
-
-        if !compact {
-            screen_rows.push(String::new());
-        }
-
-        let cmd_lbl = if state.color_enabled {
-            layout.row("\x1b[90mSuggestions:\x1b[0m")
-        } else {
-            layout.row("Suggestions:")
-        };
-        screen_rows.push(cmd_lbl);
-
-        let filtered = filter_suggestions(state.buffer);
-        if filtered.is_empty() {
-            let empty_msg = if state.color_enabled {
-                layout
-                    .row("  \x1b[90mNo matching commands found. Type '/help' for reference.\x1b[0m")
-            } else {
-                layout.row("  No matching commands found. Type '/help' for reference.")
-            };
-            screen_rows.push(empty_msg);
-        } else {
-            let max_desc_w = layout.content_width.saturating_sub(18);
-            for (i, item) in filtered.iter().enumerate() {
-                let desc = truncate_chars(item.description, max_desc_w);
-                let is_selected = i == state.selected_index;
-                let line = if is_selected {
+            for (act, label) in [
+                (ArchiveAction::Extract, "[E]xtract archive"),
+                (ArchiveAction::Test, "[T]est integrity"),
+                (ArchiveAction::Cancel, "[C]ancel"),
+            ] {
+                let is_focused = state.archive_action == act;
+                let row_str = if is_focused {
                     if state.color_enabled {
+                        format!("  \x1b[1;36m›\x1b[0m \x1b[1;37m{label}\x1b[0m")
+                    } else {
+                        format!("  > {label}")
+                    }
+                } else if state.color_enabled {
+                    format!("    \x1b[90m{label}\x1b[0m")
+                } else {
+                    format!("    {label}")
+                };
+                screen_rows.push(layout.row(&row_str));
+            }
+        }
+        PathCandidate::ArchiveInDirectory {
+            directory,
+            primary_archive,
+            total_archives,
+            format,
+        } => {
+            hide_cursor = true;
+            let filename = primary_archive
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let size_bytes = std::fs::metadata(primary_archive)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            let size_str = crate::cli::output::format_byte_size(size_bytes);
+
+            let sanitized_name = crate::cli::progress::sanitize_terminal_text(&filename);
+            let sanitized_dir =
+                crate::cli::progress::sanitize_terminal_text(&directory.display().to_string());
+            let max_val_w = layout.content_width.saturating_sub(14);
+            let disp_name = truncate_chars(&sanitized_name, max_val_w);
+            let disp_dir = crate::cli::progress::truncate_filename(&sanitized_dir, max_val_w);
+
+            let section_lbl = if state.color_enabled {
+                layout.row("\x1b[1;37mArchive Details\x1b[0m")
+            } else {
+                layout.row("Archive Details")
+            };
+            screen_rows.push(section_lbl);
+
+            let format_desc = if *total_archives > 1 {
+                format!("{format} Archive ({total_archives} found)")
+            } else {
+                format!("{format} Archive")
+            };
+
+            for (lbl, val) in [
+                ("File:", disp_name.as_str()),
+                ("Format:", format_desc.as_str()),
+                ("Size:", size_str.as_str()),
+                ("Folder:", disp_dir.as_str()),
+            ] {
+                let line = if state.color_enabled {
+                    format!("  \x1b[90m{:<10}\x1b[0m \x1b[1;37m{val}\x1b[0m", lbl)
+                } else {
+                    format!("  {:<10} {val}", lbl)
+                };
+                screen_rows.push(layout.row(&line));
+            }
+
+            if !compact {
+                screen_rows.push(String::new());
+            }
+
+            let action_lbl = if state.color_enabled {
+                layout.row("\x1b[1;37mAction\x1b[0m")
+            } else {
+                layout.row("Action")
+            };
+            screen_rows.push(action_lbl);
+
+            for (act, label) in [
+                (ArchiveAction::Extract, "[E]xtract archive"),
+                (ArchiveAction::Test, "[T]est integrity"),
+                (ArchiveAction::Cancel, "[C]ancel"),
+            ] {
+                let is_focused = state.archive_action == act;
+                let row_str = if is_focused {
+                    if state.color_enabled {
+                        format!("  \x1b[1;36m›\x1b[0m \x1b[1;37m{label}\x1b[0m")
+                    } else {
+                        format!("  > {label}")
+                    }
+                } else if state.color_enabled {
+                    format!("    \x1b[90m{label}\x1b[0m")
+                } else {
+                    format!("    {label}")
+                };
+                screen_rows.push(layout.row(&row_str));
+            }
+        }
+        PathCandidate::EmptyDirectory(dir) => {
+            let max_val_w = layout.content_width.saturating_sub(14);
+            let disp_dir =
+                crate::cli::progress::truncate_filename(&dir.display().to_string(), max_val_w);
+
+            let section_lbl = if state.color_enabled {
+                layout.row("\x1b[1;37mDirectory Details\x1b[0m")
+            } else {
+                layout.row("Directory Details")
+            };
+            screen_rows.push(section_lbl);
+            for (lbl, val) in [
+                ("Folder:", disp_dir.as_str()),
+                ("Status:", "No supported archive files found in folder"),
+            ] {
+                let line = if state.color_enabled {
+                    format!("  \x1b[90m{:<10}\x1b[0m \x1b[1;37m{val}\x1b[0m", lbl)
+                } else {
+                    format!("  {:<10} {val}", lbl)
+                };
+                screen_rows.push(layout.row(&line));
+            }
+            if !compact {
+                screen_rows.push(String::new());
+            }
+            let hint_lbl = if state.color_enabled {
+                layout.row(
+                    "\x1b[90mHint: Drop an archive file (.zip, .rar, .7z, etc.) or a folder containing one.\x1b[0m",
+                )
+            } else {
+                layout.row(
+                    "Hint: Drop an archive file (.zip, .rar, .7z, etc.) or a folder containing one.",
+                )
+            };
+            screen_rows.push(hint_lbl);
+        }
+        PathCandidate::UnsupportedFile(file) => {
+            let max_val_w = layout.content_width.saturating_sub(14);
+            let disp_file =
+                crate::cli::progress::truncate_filename(&file.display().to_string(), max_val_w);
+
+            let section_lbl = if state.color_enabled {
+                layout.row("\x1b[1;37mFile Details\x1b[0m")
+            } else {
+                layout.row("File Details")
+            };
+            screen_rows.push(section_lbl);
+            for (lbl, val) in [
+                ("File:", disp_file.as_str()),
+                ("Status:", "Not a supported archive format"),
+            ] {
+                let line = if state.color_enabled {
+                    format!("  \x1b[90m{:<10}\x1b[0m \x1b[1;37m{val}\x1b[0m", lbl)
+                } else {
+                    format!("  {:<10} {val}", lbl)
+                };
+                screen_rows.push(layout.row(&line));
+            }
+            if !compact {
+                screen_rows.push(String::new());
+            }
+            let hint_lbl = if state.color_enabled {
+                layout.row(
+                    "\x1b[90mSupported formats: .7z, .zip, .rar, .tar, .gz, .bz2, .xz, .zst, .iso, .cab, .arj, .lzh, .wim\x1b[0m",
+                )
+            } else {
+                layout.row(
+                    "Supported formats: .7z, .zip, .rar, .tar, .gz, .bz2, .xz, .zst, .iso, .cab, .arj, .lzh, .wim",
+                )
+            };
+            screen_rows.push(hint_lbl);
+        }
+        PathCandidate::NotFound(path) => {
+            let max_val_w = layout.content_width.saturating_sub(14);
+            let disp_path =
+                crate::cli::progress::truncate_filename(&path.display().to_string(), max_val_w);
+
+            let section_lbl = if state.color_enabled {
+                layout.row("\x1b[1;37mPath Details\x1b[0m")
+            } else {
+                layout.row("Path Details")
+            };
+            screen_rows.push(section_lbl);
+            for (lbl, val) in [
+                ("Path:", disp_path.as_str()),
+                ("Status:", "File or directory does not exist"),
+            ] {
+                let line = if state.color_enabled {
+                    format!("  \x1b[90m{:<10}\x1b[0m \x1b[1;37m{val}\x1b[0m", lbl)
+                } else {
+                    format!("  {:<10} {val}", lbl)
+                };
+                screen_rows.push(layout.row(&line));
+            }
+            if !compact {
+                screen_rows.push(String::new());
+            }
+            let hint_lbl = if state.color_enabled {
+                layout.row(
+                    "\x1b[90mHint: Please verify the path or drop a file directly into the terminal.\x1b[0m",
+                )
+            } else {
+                layout
+                    .row("Hint: Please verify the path or drop a file directly into the terminal.")
+            };
+            screen_rows.push(hint_lbl);
+        }
+        PathCandidate::NotAPath if is_command_palette_input(state.buffer) => {
+            let max_disp_buf = layout.content_width.saturating_sub(6);
+            let disp_buf = truncate_chars(state.buffer, max_disp_buf);
+
+            let prompt_lbl = if state.color_enabled {
+                layout.row("\x1b[1;37mCommand:\x1b[0m")
+            } else {
+                layout.row("Command:")
+            };
+            screen_rows.push(prompt_lbl);
+
+            let prompt_sym = if state.color_enabled {
+                "\x1b[1;36m›\x1b[0m"
+            } else {
+                ">"
+            };
+            screen_rows.push(layout.row(&format!("{prompt_sym} {disp_buf}")));
+            cursor_x = layout.left_margin + 2 + disp_buf.chars().count();
+            cursor_y = screen_rows.len().saturating_sub(1);
+
+            if !compact {
+                screen_rows.push(String::new());
+            }
+
+            let cmd_lbl = if state.color_enabled {
+                layout.row("\x1b[90mSuggestions:\x1b[0m")
+            } else {
+                layout.row("Suggestions:")
+            };
+            screen_rows.push(cmd_lbl);
+
+            let filtered = filter_suggestions(state.buffer);
+            if filtered.is_empty() {
+                let empty_msg = if state.color_enabled {
+                    layout.row(
+                        "  \x1b[90mNo matching commands found. Type '/help' for reference.\x1b[0m",
+                    )
+                } else {
+                    layout.row("  No matching commands found. Type '/help' for reference.")
+                };
+                screen_rows.push(empty_msg);
+            } else {
+                let max_desc_w = layout.content_width.saturating_sub(18);
+                for (i, item) in filtered.iter().enumerate() {
+                    let desc = truncate_chars(item.description, max_desc_w);
+                    let is_selected = i == state.selected_index;
+                    let line = if is_selected {
+                        if state.color_enabled {
+                            format!(
+                                "  \x1b[1;36m›\x1b[0m \x1b[1;36m{:<10}\x1b[0m  \x1b[1;37m{desc}\x1b[0m",
+                                item.command
+                            )
+                        } else {
+                            format!("  > {:<10}  {desc}", item.command)
+                        }
+                    } else if state.color_enabled {
                         format!(
-                            "  \x1b[1;36m›\x1b[0m \x1b[1;36m{:<10}\x1b[0m  \x1b[1;37m{desc}\x1b[0m",
+                            "    \x1b[37m{:<10}\x1b[0m  \x1b[90m{desc}\x1b[0m",
                             item.command
                         )
                     } else {
-                        format!("  > {:<10}  {desc}", item.command)
-                    }
-                } else if state.color_enabled {
-                    format!(
-                        "    \x1b[37m{:<10}\x1b[0m  \x1b[90m{desc}\x1b[0m",
-                        item.command
-                    )
-                } else {
-                    format!("    {:<10}  {desc}", item.command)
-                };
-                screen_rows.push(layout.row(&line));
+                        format!("    {:<10}  {desc}", item.command)
+                    };
+                    screen_rows.push(layout.row(&line));
+                }
             }
         }
-    } else {
-        // Home Screen / General Input State
-        let prompt_lbl = if state.color_enabled {
-            layout.row("\x1b[1;37mEnter archive path:\x1b[0m")
-        } else {
-            layout.row("Enter archive path:")
-        };
-        screen_rows.push(prompt_lbl);
-
-        let max_disp_buf = layout.content_width.saturating_sub(6);
-        let disp_buf = truncate_chars(state.buffer, max_disp_buf);
-        let prompt_sym = if state.color_enabled {
-            "\x1b[1;36m›\x1b[0m"
-        } else {
-            ">"
-        };
-        screen_rows.push(layout.row(&format!("{prompt_sym} {disp_buf}")));
-
-        cursor_x = layout.left_margin + 2 + disp_buf.chars().count();
-        cursor_y = screen_rows.len().saturating_sub(1);
-
-        if !compact {
-            screen_rows.push(String::new());
-        }
-
-        if state.buffer.trim().is_empty() {
-            let qa_lbl = if state.color_enabled {
-                layout.row("\x1b[90mQuick Actions:\x1b[0m")
+        PathCandidate::NotAPath => {
+            // Home Screen / General Input State
+            let prompt_lbl = if state.color_enabled {
+                layout.row("\x1b[1;37mEnter archive path:\x1b[0m")
             } else {
-                layout.row("Quick Actions:")
+                layout.row("Enter archive path:")
             };
-            screen_rows.push(qa_lbl);
+            screen_rows.push(prompt_lbl);
 
-            let max_label_w = if layout.content_width < 54 {
-                layout.content_width.saturating_sub(16).min(18)
+            let max_disp_buf = layout.content_width.saturating_sub(6);
+            let disp_buf = truncate_chars(state.buffer, max_disp_buf);
+            let prompt_sym = if state.color_enabled {
+                "\x1b[1;36m›\x1b[0m"
             } else {
-                22
+                ">"
             };
+            screen_rows.push(layout.row(&format!("{prompt_sym} {disp_buf}")));
 
-            for (i, action) in QUICK_ACTIONS.iter().enumerate() {
-                let is_selected = state.home_selection == Some(i);
-                let label_disp = truncate_chars(action.label, max_label_w);
-                let line = if is_selected {
-                    if state.color_enabled {
+            cursor_x = layout.left_margin + 2 + disp_buf.chars().count();
+            cursor_y = screen_rows.len().saturating_sub(1);
+
+            if !compact {
+                screen_rows.push(String::new());
+            }
+
+            if state.buffer.trim().is_empty() {
+                let qa_lbl = if state.color_enabled {
+                    layout.row("\x1b[90mQuick Actions:\x1b[0m")
+                } else {
+                    layout.row("Quick Actions:")
+                };
+                screen_rows.push(qa_lbl);
+
+                let max_label_w = if layout.content_width < 54 {
+                    layout.content_width.saturating_sub(16).min(18)
+                } else {
+                    22
+                };
+
+                for (i, action) in QUICK_ACTIONS.iter().enumerate() {
+                    let is_selected = state.home_selection == Some(i);
+                    let label_disp = truncate_chars(action.label, max_label_w);
+                    let line = if is_selected {
+                        if state.color_enabled {
+                            format!(
+                                "  \x1b[1;36m›\x1b[0m \x1b[1;37m{:<width$}\x1b[0m \x1b[90m{}\x1b[0m",
+                                label_disp,
+                                action.command,
+                                width = max_label_w
+                            )
+                        } else {
+                            format!(
+                                "  > {:<width$} {}",
+                                label_disp,
+                                action.command,
+                                width = max_label_w
+                            )
+                        }
+                    } else if state.color_enabled {
                         format!(
-                            "  \x1b[1;36m›\x1b[0m \x1b[1;37m{:<width$}\x1b[0m \x1b[90m{}\x1b[0m",
+                            "    \x1b[37m{:<width$}\x1b[0m \x1b[90m{}\x1b[0m",
                             label_disp,
                             action.command,
                             width = max_label_w
                         )
                     } else {
                         format!(
-                            "  > {:<width$} {}",
+                            "    {:<width$} {}",
                             label_disp,
                             action.command,
                             width = max_label_w
                         )
-                    }
-                } else if state.color_enabled {
-                    format!(
-                        "    \x1b[37m{:<width$}\x1b[0m \x1b[90m{}\x1b[0m",
-                        label_disp,
-                        action.command,
-                        width = max_label_w
-                    )
+                    };
+                    screen_rows.push(layout.row(&line));
+                }
+            } else {
+                let hint1 = if layout.content_width < 50 {
+                    "Enter to extract path"
                 } else {
-                    format!(
-                        "    {:<width$} {}",
-                        label_disp,
-                        action.command,
-                        width = max_label_w
-                    )
+                    "Press Enter to inspect or extract path"
                 };
-                screen_rows.push(layout.row(&line));
+                let hint2 = if layout.content_width < 50 {
+                    "'/' for commands"
+                } else {
+                    "Type '/' to open command palette"
+                };
+                let h1_line = if state.color_enabled {
+                    format!("  \x1b[90m{hint1}\x1b[0m")
+                } else {
+                    format!("  {hint1}")
+                };
+                screen_rows.push(layout.row(&h1_line));
+                let h2_line = if state.color_enabled {
+                    format!("  \x1b[90m{hint2}\x1b[0m")
+                } else {
+                    format!("  {hint2}")
+                };
+                screen_rows.push(layout.row(&h2_line));
             }
-        } else {
-            let hint1 = if layout.content_width < 50 {
-                "Enter to extract path"
-            } else {
-                "Press Enter to inspect or extract path"
-            };
-            let hint2 = if layout.content_width < 50 {
-                "'/' for commands"
-            } else {
-                "Type '/' to open command palette"
-            };
-            let h1_line = if state.color_enabled {
-                format!("  \x1b[90m{hint1}\x1b[0m")
-            } else {
-                format!("  {hint1}")
-            };
-            screen_rows.push(layout.row(&h1_line));
-            let h2_line = if state.color_enabled {
-                format!("  \x1b[90m{hint2}\x1b[0m")
-            } else {
-                format!("  {hint2}")
-            };
-            screen_rows.push(layout.row(&h2_line));
         }
     }
 
@@ -787,7 +1184,18 @@ pub fn generate_dashboard_rows(
             ("Esc", "Cancel"),
             ("Ctrl+C", "Exit"),
         ])
-    } else if state.buffer.starts_with('/') {
+    } else if matches!(
+        candidate_status,
+        PathCandidate::EmptyDirectory(_)
+            | PathCandidate::UnsupportedFile(_)
+            | PathCandidate::NotFound(_)
+    ) {
+        layout.format_hints(&[
+            ("Esc", "Clear"),
+            ("Backspace", "Edit path"),
+            ("Ctrl+C", "Exit"),
+        ])
+    } else if is_command_palette_input(state.buffer) {
         layout.format_hints(&[
             ("Enter", "Run"),
             ("Tab", "Complete"),
@@ -1220,8 +1628,60 @@ fn run_command_in_tui_layout(
         return run_test_in_tui_layout(app, formatter, arch, layout);
     }
 
-    // Default fallback
-    execute_interactive_command(app, formatter, cmd_str)
+    // Centered layout fallback for archive paths, directory inspection, and commands
+    match inspect_path_candidate(trimmed) {
+        PathCandidate::ArchiveFile { path, .. }
+        | PathCandidate::ArchiveInDirectory {
+            primary_archive: path,
+            ..
+        } => {
+            let p_str = path.to_string_lossy().to_string();
+            run_extract_in_tui_layout(app, formatter, Some(p_str), None, layout)
+        }
+        PathCandidate::EmptyDirectory(dir) => {
+            let max_w = layout.content_width.saturating_sub(14);
+            let disp = crate::cli::progress::truncate_filename(&dir.display().to_string(), max_w);
+            println!(
+                "{}",
+                layout.row(&format!("Directory contains no supported archives: {disp}"))
+            );
+            println!(
+                "{}",
+                layout.row("Hint: Drag or specify an archive file (.zip, .rar, .7z, etc.) or a folder containing one.")
+            );
+            Ok(())
+        }
+        PathCandidate::UnsupportedFile(file) => {
+            let max_w = layout.content_width.saturating_sub(14);
+            let disp = crate::cli::progress::truncate_filename(&file.display().to_string(), max_w);
+            println!("{}", layout.row(&format!("Unsupported file type: {disp}")));
+            println!(
+                "{}",
+                layout.row("Supported formats: .7z, .zip, .rar, .tar, .gz, .bz2, .xz, .zst, .iso, .cab, .arj, .lzh, .wim")
+            );
+            Ok(())
+        }
+        PathCandidate::NotFound(path) => {
+            let max_w = layout.content_width.saturating_sub(14);
+            let disp = crate::cli::progress::truncate_filename(&path.display().to_string(), max_w);
+            println!("{}", layout.row(&format!("Path not found: '{disp}'")));
+            println!(
+                "{}",
+                layout.row("Hint: Please verify the file or directory exists.")
+            );
+            Ok(())
+        }
+        PathCandidate::NotAPath => {
+            let sanitized = crate::cli::progress::sanitize_terminal_text(trimmed);
+            println!(
+                "{}",
+                layout.row(&format!(
+                    "Unrecognized command: '{sanitized}'. Type '/help' for available commands."
+                ))
+            );
+            Ok(())
+        }
+    }
 }
 
 fn run_test_in_tui_layout(
@@ -1246,7 +1706,23 @@ fn run_test_in_tui_layout(
             clean
         }
     };
-    let archive_path = PathBuf::from(archive_str);
+    let raw_archive_path = PathBuf::from(archive_str);
+    let archive_path = match resolve_archive_or_directory(&raw_archive_path) {
+        Ok(p) => p,
+        Err(dir_disp) => {
+            let max_w = layout.content_width.saturating_sub(14);
+            let disp = crate::cli::progress::truncate_filename(&dir_disp, max_w);
+            println!(
+                "{}",
+                layout.row(&format!("Directory contains no supported archives: {disp}"))
+            );
+            println!(
+                "{}",
+                layout.row("Hint: Drag or specify an archive file (.zip, .rar, .7z, etc.) or a folder containing one.")
+            );
+            return Ok(());
+        }
+    };
     let max_w = layout.content_width.saturating_sub(14);
     let disp_path =
         crate::cli::progress::truncate_filename(&archive_path.display().to_string(), max_w);
@@ -1310,7 +1786,23 @@ fn run_extract_in_tui_layout(
             clean_archive
         }
     };
-    let archive_path = PathBuf::from(archive_str);
+    let raw_archive_path = PathBuf::from(archive_str);
+    let archive_path = match resolve_archive_or_directory(&raw_archive_path) {
+        Ok(p) => p,
+        Err(dir_disp) => {
+            let max_w = layout.content_width.saturating_sub(14);
+            let disp = crate::cli::progress::truncate_filename(&dir_disp, max_w);
+            println!(
+                "{}",
+                layout.row(&format!("Directory contains no supported archives: {disp}"))
+            );
+            println!(
+                "{}",
+                layout.row("Hint: Drag or specify an archive file (.zip, .rar, .7z, etc.) or a folder containing one.")
+            );
+            return Ok(());
+        }
+    };
 
     let dest_opt_buf: Option<PathBuf> = match inline_dest {
         Some(dest) if !dest.trim().is_empty() => Some(PathBuf::from(clean_terminal_path(&dest))),
@@ -1474,13 +1966,17 @@ fn run_terminal_loop(
                     }
 
                     // Check archive detection state
-                    let candidate_str = clean_terminal_path(buffer.trim());
-                    let candidate_path = PathBuf::from(&candidate_str);
-                    let is_archive_detected = !candidate_str.is_empty()
-                        && candidate_path.is_file()
-                        && crate::archive::ArchiveFormat::from_extension(&candidate_path).is_some();
+                    let candidate_status = inspect_path_candidate(&buffer);
+                    let target_archive: Option<PathBuf> = match &candidate_status {
+                        PathCandidate::ArchiveFile { path, .. } => Some(path.clone()),
+                        PathCandidate::ArchiveInDirectory {
+                            primary_archive, ..
+                        } => Some(primary_archive.clone()),
+                        _ => None,
+                    };
 
-                    if is_archive_detected {
+                    if let Some(archive_path) = target_archive {
+                        let candidate_str = archive_path.to_string_lossy().to_string();
                         match key.code {
                             KeyCode::Tab | KeyCode::Down | KeyCode::Right => {
                                 archive_action = match archive_action {
@@ -1514,71 +2010,25 @@ fn run_terminal_loop(
                                 )?;
                                 continue;
                             }
-                            KeyCode::Char('e') | KeyCode::Char('E') => {
-                                let continue_app = execute_command_in_tui(
-                                    app,
-                                    formatter,
-                                    &format!("/extract \"{candidate_str}\""),
-                                    &app_info,
-                                )?;
-                                if !continue_app {
-                                    break;
-                                }
-                                buffer.clear();
-                                selected_index = 0;
-                                home_selection = None;
-                                archive_action = ArchiveAction::Extract;
-                                render_dashboard(
-                                    &app_info,
-                                    &buffer,
-                                    selected_index,
-                                    home_selection,
-                                    archive_action,
-                                    color_enabled,
-                                )?;
-                                continue;
-                            }
-                            KeyCode::Char('t') | KeyCode::Char('T') => {
-                                let continue_app = execute_command_in_tui(
-                                    app,
-                                    formatter,
-                                    &format!("/test \"{candidate_str}\""),
-                                    &app_info,
-                                )?;
-                                if !continue_app {
-                                    break;
-                                }
-                                buffer.clear();
-                                selected_index = 0;
-                                home_selection = None;
-                                archive_action = ArchiveAction::Extract;
-                                render_dashboard(
-                                    &app_info,
-                                    &buffer,
-                                    selected_index,
-                                    home_selection,
-                                    archive_action,
-                                    color_enabled,
-                                )?;
-                                continue;
-                            }
-                            KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Esc => {
-                                buffer.clear();
-                                selected_index = 0;
-                                home_selection = None;
-                                archive_action = ArchiveAction::Extract;
-                                render_dashboard(
-                                    &app_info,
-                                    &buffer,
-                                    selected_index,
-                                    home_selection,
-                                    archive_action,
-                                    color_enabled,
-                                )?;
-                                continue;
-                            }
-                            KeyCode::Enter => {
-                                match archive_action {
+                            KeyCode::Char('e')
+                            | KeyCode::Char('E')
+                            | KeyCode::Char('t')
+                            | KeyCode::Char('T')
+                            | KeyCode::Char('c')
+                            | KeyCode::Char('C')
+                            | KeyCode::Esc
+                            | KeyCode::Enter => {
+                                let act = match key.code {
+                                    KeyCode::Char('e') | KeyCode::Char('E') => {
+                                        ArchiveAction::Extract
+                                    }
+                                    KeyCode::Char('t') | KeyCode::Char('T') => ArchiveAction::Test,
+                                    KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Esc => {
+                                        ArchiveAction::Cancel
+                                    }
+                                    _ => archive_action,
+                                };
+                                match act {
                                     ArchiveAction::Extract => {
                                         let continue_app = execute_command_in_tui(
                                             app,
@@ -1676,7 +2126,7 @@ fn run_terminal_loop(
                             )?;
                         }
                         KeyCode::Up => {
-                            if buffer.starts_with('/') {
+                            if is_command_palette_input(&buffer) {
                                 selected_index = selected_index.saturating_sub(1);
                             } else if buffer.trim().is_empty() {
                                 home_selection = match home_selection {
@@ -1695,7 +2145,7 @@ fn run_terminal_loop(
                             )?;
                         }
                         KeyCode::Down => {
-                            if buffer.starts_with('/') {
+                            if is_command_palette_input(&buffer) {
                                 let filtered = filter_suggestions(&buffer);
                                 if !filtered.is_empty() && selected_index + 1 < filtered.len() {
                                     selected_index += 1;
@@ -1717,7 +2167,7 @@ fn run_terminal_loop(
                             )?;
                         }
                         KeyCode::Tab => {
-                            if buffer.starts_with('/') {
+                            if is_command_palette_input(&buffer) {
                                 let filtered = filter_suggestions(&buffer);
                                 if !filtered.is_empty() {
                                     let idx = selected_index.min(filtered.len() - 1);
@@ -1751,7 +2201,7 @@ fn run_terminal_loop(
                                 } else {
                                     String::new()
                                 }
-                            } else if buffer.starts_with('/') && !buffer.contains(' ') {
+                            } else if is_command_palette_input(&buffer) {
                                 let filtered = filter_suggestions(&buffer);
                                 if !filtered.is_empty() {
                                     let idx = selected_index.min(filtered.len() - 1);
@@ -1808,6 +2258,17 @@ fn run_terminal_loop(
                         }
                         _ => {}
                     }
+                }
+                Ok(Event::Paste(text)) => {
+                    buffer.push_str(&text);
+                    render_dashboard(
+                        &app_info,
+                        &buffer,
+                        selected_index,
+                        home_selection,
+                        archive_action,
+                        color_enabled,
+                    )?;
                 }
                 Ok(Event::Resize(_, _)) => {
                     render_dashboard(
@@ -1920,45 +2381,91 @@ pub fn execute_interactive_command(
         return run_test_interactive(app, formatter, arch);
     }
 
-    // Check if input is a dragged filesystem archive path
-    let cleaned_candidate = clean_terminal_path(trimmed);
-    let candidate_path = Path::new(&cleaned_candidate);
-    let is_supported_archive = candidate_path.is_file()
-        && crate::archive::ArchiveFormat::from_extension(candidate_path).is_some();
-
-    if is_supported_archive {
-        let display_path = crate::cli::progress::sanitize_terminal_text(&cleaned_candidate);
-        println!("Archive detected: {display_path}");
-        let e_act = formatter.style("[E]xtract", "\x1b[1m");
-        let t_act = formatter.style("[T]est integrity", "\x1b[1m");
-        let c_act = formatter.style("[C]ancel", "\x1b[1m");
-        print!("  {e_act} (default)   {t_act}   {c_act}: ");
-        let _ = stdout().flush();
-
-        let mut choice = String::new();
-        stdin().read_line(&mut choice)?;
-        let choice_trimmed = choice.trim();
-
-        if choice_trimmed.is_empty()
-            || choice_trimmed.eq_ignore_ascii_case("e")
-            || choice_trimmed.eq_ignore_ascii_case("extract")
-        {
-            return run_extract_interactive(app, formatter, Some(cleaned_candidate), None);
-        } else if choice_trimmed.eq_ignore_ascii_case("t")
-            || choice_trimmed.eq_ignore_ascii_case("test")
-        {
-            return run_test_interactive(app, formatter, Some(cleaned_candidate));
-        } else {
-            if !formatter.is_quiet() {
-                println!("{}", formatter.style("Operation cancelled.", "\x1b[90m"));
+    // Check if input is a dragged filesystem archive path, directory, or unrecognized command
+    match inspect_path_candidate(trimmed) {
+        PathCandidate::ArchiveFile { path, .. } => {
+            prompt_and_run_interactive_archive(app, formatter, &path.to_string_lossy())
+        }
+        PathCandidate::ArchiveInDirectory {
+            primary_archive,
+            total_archives,
+            ..
+        } => {
+            if total_archives > 1 && !formatter.is_quiet() {
+                println!(
+                    "Found {total_archives} archive parts in folder. Primary: {}",
+                    primary_archive.display()
+                );
             }
-            return Ok(());
+            prompt_and_run_interactive_archive(app, formatter, &primary_archive.to_string_lossy())
+        }
+        PathCandidate::EmptyDirectory(dir) => {
+            let sanitized =
+                crate::cli::progress::sanitize_terminal_text(&dir.display().to_string());
+            println!("Directory contains no supported archives: '{sanitized}'.");
+            println!(
+                "Hint: Drag or specify an archive file (.zip, .rar, .7z, etc.) or a folder containing one."
+            );
+            Ok(())
+        }
+        PathCandidate::UnsupportedFile(file) => {
+            let sanitized =
+                crate::cli::progress::sanitize_terminal_text(&file.display().to_string());
+            println!("Unsupported file type: '{sanitized}'.");
+            println!(
+                "Supported formats: .7z, .zip, .rar, .tar, .gz, .bz2, .xz, .zst, .iso, .cab, .arj, .lzh, .wim"
+            );
+            Ok(())
+        }
+        PathCandidate::NotFound(path) => {
+            let sanitized =
+                crate::cli::progress::sanitize_terminal_text(&path.display().to_string());
+            println!("Path not found: '{sanitized}'.");
+            println!("Hint: Please verify the file or directory exists.");
+            Ok(())
+        }
+        PathCandidate::NotAPath => {
+            let sanitized_unknown = crate::cli::progress::sanitize_terminal_text(trimmed);
+            println!(
+                "Unrecognized command: '{sanitized_unknown}'. Type '/help' for available commands."
+            );
+            Ok(())
         }
     }
+}
 
-    let sanitized_unknown = crate::cli::progress::sanitize_terminal_text(trimmed);
-    println!("Unrecognized command: '{sanitized_unknown}'. Type '/help' for available commands.");
-    Ok(())
+fn prompt_and_run_interactive_archive(
+    app: &Application,
+    formatter: &crate::cli::output::OutputFormatter,
+    candidate_path: &str,
+) -> Result<()> {
+    let display_path = crate::cli::progress::sanitize_terminal_text(candidate_path);
+    println!("Archive detected: {display_path}");
+    let e_act = formatter.style("[E]xtract", "\x1b[1m");
+    let t_act = formatter.style("[T]est integrity", "\x1b[1m");
+    let c_act = formatter.style("[C]ancel", "\x1b[1m");
+    print!("  {e_act} (default)   {t_act}   {c_act}: ");
+    let _ = stdout().flush();
+
+    let mut choice = String::new();
+    stdin().read_line(&mut choice)?;
+    let choice_trimmed = choice.trim();
+
+    if choice_trimmed.is_empty()
+        || choice_trimmed.eq_ignore_ascii_case("e")
+        || choice_trimmed.eq_ignore_ascii_case("extract")
+    {
+        run_extract_interactive(app, formatter, Some(candidate_path.to_string()), None)
+    } else if choice_trimmed.eq_ignore_ascii_case("t")
+        || choice_trimmed.eq_ignore_ascii_case("test")
+    {
+        run_test_interactive(app, formatter, Some(candidate_path.to_string()))
+    } else {
+        if !formatter.is_quiet() {
+            println!("{}", formatter.style("Operation cancelled.", "\x1b[90m"));
+        }
+        Ok(())
+    }
 }
 
 /// Unescapes backslash-escaped characters commonly inserted by macOS terminal drag-and-drop
@@ -2103,7 +2610,16 @@ fn run_test_interactive(
             clean
         }
     };
-    let archive_path = PathBuf::from(archive_str);
+    let raw_archive_path = PathBuf::from(archive_str);
+    let archive_path = match resolve_archive_or_directory(&raw_archive_path) {
+        Ok(p) => p,
+        Err(dir_disp) => {
+            if !formatter.is_quiet() {
+                println!("Directory contains no supported archives: '{dir_disp}'.");
+            }
+            return Ok(());
+        }
+    };
 
     let show_progress = formatter.should_show_progress();
     if !show_progress && !formatter.is_quiet() {
@@ -2145,7 +2661,16 @@ fn run_extract_interactive(
             clean_archive
         }
     };
-    let archive_path = PathBuf::from(archive_str);
+    let raw_archive_path = PathBuf::from(archive_str);
+    let archive_path = match resolve_archive_or_directory(&raw_archive_path) {
+        Ok(p) => p,
+        Err(dir_disp) => {
+            if !formatter.is_quiet() {
+                println!("Directory contains no supported archives: '{dir_disp}'.");
+            }
+            return Ok(());
+        }
+    };
 
     let dest_opt_buf: Option<PathBuf> = match inline_dest {
         Some(dest) if !dest.trim().is_empty() => Some(PathBuf::from(clean_terminal_path(&dest))),
@@ -2646,5 +3171,125 @@ mod tests {
             println!("{r}");
         }
         let _ = std::fs::remove_file(archive_file);
+    }
+
+    #[test]
+    fn test_is_command_palette_input() {
+        assert!(is_command_palette_input("/"));
+        assert!(is_command_palette_input("/help"));
+        assert!(is_command_palette_input("/extract"));
+        assert!(is_command_palette_input("/test"));
+        assert!(is_command_palette_input("/doctor"));
+        assert!(is_command_palette_input("/config"));
+        assert!(is_command_palette_input("/update"));
+        assert!(is_command_palette_input("/exit"));
+        assert!(is_command_palette_input("/ex"));
+
+        // Filesystem paths must NOT be classified as command palette inputs
+        assert!(!is_command_palette_input(
+            "/Users/mosabbirmaruf/Downloads/Wolverine"
+        ));
+        assert!(!is_command_palette_input("/tmp/archive.zip"));
+        assert!(!is_command_palette_input("/var/log"));
+        assert!(!is_command_palette_input("/a/b"));
+
+        // Commands with arguments contain whitespace
+        assert!(!is_command_palette_input("/extract archive.zip"));
+        assert!(!is_command_palette_input("/test data.tar.gz"));
+
+        // Empty or non-slash inputs
+        assert!(!is_command_palette_input(""));
+        assert!(!is_command_palette_input("help"));
+        assert!(!is_command_palette_input("extract"));
+    }
+
+    #[test]
+    fn test_inspect_path_candidate_directory_and_files() {
+        let temp_dir = std::env::temp_dir().join(format!("unarc_test_dir_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        // Empty directory
+        match inspect_path_candidate(&temp_dir.to_string_lossy()) {
+            PathCandidate::EmptyDirectory(dir) => assert_eq!(dir, temp_dir),
+            other => panic!("Expected EmptyDirectory, got: {other:?}"),
+        }
+
+        // Add multi-part archives to directory
+        let part1 = temp_dir.join("game.part01.rar");
+        let part2 = temp_dir.join("game.part02.rar");
+        let _ = std::fs::write(&part1, b"Rar!\x1a\x07\x00dummyrar");
+        let _ = std::fs::write(&part2, b"Rar!\x1a\x07\x00dummyrar");
+
+        match inspect_path_candidate(&temp_dir.to_string_lossy()) {
+            PathCandidate::ArchiveInDirectory {
+                primary_archive,
+                total_archives,
+                format,
+                ..
+            } => {
+                assert_eq!(primary_archive, part1);
+                assert_eq!(total_archives, 2);
+                assert_eq!(format, ArchiveFormat::Rar);
+            }
+            other => panic!("Expected ArchiveInDirectory, got: {other:?}"),
+        }
+
+        // Single file archive
+        match inspect_path_candidate(&part1.to_string_lossy()) {
+            PathCandidate::ArchiveFile { path, format } => {
+                assert_eq!(path, part1);
+                assert_eq!(format, ArchiveFormat::Rar);
+            }
+            other => panic!("Expected ArchiveFile, got: {other:?}"),
+        }
+
+        // Unsupported regular file
+        let text_file = temp_dir.join("notes.txt");
+        let _ = std::fs::write(&text_file, b"some text");
+        match inspect_path_candidate(&text_file.to_string_lossy()) {
+            PathCandidate::UnsupportedFile(path) => assert_eq!(path, text_file),
+            other => panic!("Expected UnsupportedFile, got: {other:?}"),
+        }
+
+        // Non-existent path
+        let non_existent = temp_dir.join("does_not_exist_xyz");
+        match inspect_path_candidate(&non_existent.to_string_lossy()) {
+            PathCandidate::NotFound(path) => assert_eq!(path, non_existent),
+            other => panic!("Expected NotFound, got: {other:?}"),
+        }
+
+        // Arbitrary command string
+        assert_eq!(
+            inspect_path_candidate("unknown_cmd"),
+            PathCandidate::NotAPath
+        );
+        assert_eq!(inspect_path_candidate("/help"), PathCandidate::NotAPath);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_directory_detected_dashboard_alignment() {
+        let app = Application::default();
+        let info = app.app_info();
+
+        let temp_dir = std::env::temp_dir().join(format!("unarc_empty_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let state = DashboardState {
+            buffer: &temp_dir.to_string_lossy(),
+            selected_index: 0,
+            home_selection: None,
+            archive_action: ArchiveAction::Extract,
+            term_width: 80,
+            term_height: 24,
+            color_enabled: false,
+        };
+        let (rows, _, _) = generate_dashboard_rows(&info, &state);
+        let joined = rows.join("\n");
+        assert!(joined.contains("Directory Detected"));
+        assert!(joined.contains("No supported archive files found in folder"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

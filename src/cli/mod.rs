@@ -3,11 +3,15 @@
 pub mod args;
 pub mod interactive;
 pub mod output;
+pub mod password;
 pub mod progress;
 
 pub use args::{Cli, Commands, ExtractArgs, TestArgs};
 pub use interactive::run_interactive;
 pub use output::OutputFormatter;
+pub use password::{
+    EYE_TOGGLE_GLYPH, MASK_BULLET_GLYPH, PasswordPromptState, render_password_prompt,
+};
 
 use crate::archive::{ArchiveExtractResult, ArchiveTestResult};
 use crate::core::Application;
@@ -31,7 +35,7 @@ pub trait PasswordPrompter {
     fn prompt_password(&self, prompt: &str) -> std::io::Result<String>;
 }
 
-/// Standard terminal password prompter using masked terminal input.
+/// Standard terminal password prompter using masked terminal input with eye toggle and character count.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TerminalPasswordPrompter;
 
@@ -42,8 +46,15 @@ impl PasswordPrompter for TerminalPasswordPrompter {
     }
 
     fn prompt_password(&self, prompt: &str) -> std::io::Result<String> {
-        rpassword::prompt_password(prompt)
+        let left_margin = prompt.chars().take_while(|c| *c == ' ').count();
+        let color_enabled = std::env::var_os("NO_COLOR").is_none();
+        crate::cli::password::prompt_password_terminal(left_margin, color_enabled)
     }
+}
+
+#[must_use]
+pub fn format_password_prompt(left_margin: usize) -> String {
+    crate::cli::password::render_password_prompt(left_margin, "", false)
 }
 
 /// Runs an archive integrity test with interactive password prompt fallback if encrypted.
@@ -78,9 +89,14 @@ pub fn run_test_with_prompt<P: PasswordPrompter>(
             if !prompter.is_interactive() {
                 return Err(e);
             }
-            let password = prompter
-                .prompt_password("Enter archive password: ")
-                .unwrap_or_default();
+            let prompt = format_password_prompt(left_margin);
+            let password = match prompter.prompt_password(&prompt) {
+                Ok(p) => p,
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
+                    return Err(UnarcError::Interrupted);
+                }
+                Err(_) => String::new(),
+            };
             run_with_bar(Some(&password))
         }
         Err(e) => Err(e),
@@ -125,9 +141,14 @@ pub fn run_extract_with_prompt<P: PasswordPrompter>(
             if !prompter.is_interactive() {
                 return Err(e);
             }
-            let password = prompter
-                .prompt_password("Enter archive password: ")
-                .unwrap_or_default();
+            let prompt = format_password_prompt(left_margin);
+            let password = match prompter.prompt_password(&prompt) {
+                Ok(p) => p,
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
+                    return Err(UnarcError::Interrupted);
+                }
+                Err(_) => String::new(),
+            };
             run_with_bar(Some(&password))
         }
         Err(e) => Err(e),
@@ -224,5 +245,20 @@ pub fn run_with_cli_and_prompter<P: PasswordPrompter>(cli: Cli, prompter: &P) ->
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_password_prompt_alignment() {
+        assert_eq!(format_password_prompt(0), "Password    (0)  ◉");
+        assert_eq!(format_password_prompt(4), "    Password    (0)  ◉");
+        assert_eq!(
+            format_password_prompt(20),
+            "                    Password    (0)  ◉"
+        );
     }
 }

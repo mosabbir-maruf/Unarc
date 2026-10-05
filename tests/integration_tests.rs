@@ -3246,3 +3246,102 @@ fn test_preflight_read_only_filesystem_fails_even_as_root() {
     }
     let _ = std::fs::remove_dir_all(&temp);
 }
+
+// =========================================================================
+// Production-grade Password Prompt UX & Security Regression Suite
+// =========================================================================
+
+#[test]
+fn test_password_ux_1_masked_rendering() {
+    let mut state = unarc::cli::PasswordPromptState::new(0);
+    state.insert_str("secret1234");
+    assert!(!state.is_visible());
+    assert_eq!(state.render_plain(), "Password  ••••••••••  (10)  ◉");
+    assert!(!state.render_plain().contains("secret"));
+}
+
+#[test]
+fn test_password_ux_2_dynamic_character_count() {
+    let mut state = unarc::cli::PasswordPromptState::new(0);
+    assert_eq!(state.char_count(), 0);
+    assert_eq!(state.render_plain(), "Password    (0)  ◉");
+
+    state.insert_str("pass");
+    assert_eq!(state.char_count(), 4);
+    assert_eq!(state.render_plain(), "Password  ••••  (4)  ◉");
+
+    state.insert_char('w');
+    state.insert_char('o');
+    state.insert_char('r');
+    state.insert_char('d');
+    assert_eq!(state.char_count(), 8);
+    assert_eq!(state.render_plain(), "Password  ••••••••  (8)  ◉");
+}
+
+#[test]
+fn test_password_ux_3_show_hide_toggle() {
+    let mut state = unarc::cli::PasswordPromptState::new(0);
+    state.insert_str("secret1234");
+
+    // Hidden by default
+    assert_eq!(state.render_plain(), "Password  ••••••••••  (10)  ◉");
+
+    // Toggle to visible
+    state.toggle_visibility();
+    assert_eq!(state.render_plain(), "Password  secret1234  (10)  ◉");
+
+    // Toggle back to masked
+    state.toggle_visibility();
+    assert_eq!(state.render_plain(), "Password  ••••••••••  (10)  ◉");
+}
+
+#[test]
+fn test_password_ux_4_visibility_reset_on_new_prompt() {
+    let mut state = unarc::cli::PasswordPromptState::new(0);
+    state.insert_str("test_pass");
+    state.set_visible(true);
+    assert!(state.is_visible());
+
+    // Reset back to new prompt state
+    state.reset();
+    assert!(!state.is_visible());
+    assert_eq!(state.char_count(), 0);
+    assert_eq!(state.password(), "");
+}
+
+#[test]
+fn test_password_ux_5_password_value_unchanged_after_toggling() {
+    let mut state = unarc::cli::PasswordPromptState::new(0);
+    let original = "ComplexP@ssw0rd!#$ 2026";
+    state.insert_str(original);
+
+    for _ in 0..20 {
+        state.toggle_visibility();
+        assert_eq!(state.password(), original);
+    }
+}
+
+#[test]
+fn test_password_ux_6_security_and_non_interactive_behavior() {
+    let non_interactive_prompter = TestMockPrompter {
+        interactive: false,
+        password: "Ignored".to_string(),
+        prompt_called: std::sync::atomic::AtomicBool::new(false),
+    };
+    assert!(!non_interactive_prompter.is_interactive());
+
+    let temp_dir = std::env::temp_dir();
+    let sample = temp_dir.join("p_ux_test.txt");
+    std::fs::write(&sample, b"test content").unwrap();
+    let arch = temp_dir.join("p_ux_test.zip");
+    create_test_zip(&arch);
+
+    let app = Application::default();
+    let show_progress = false;
+    let res =
+        unarc::cli::run_test_with_prompt(&app, &arch, &non_interactive_prompter, show_progress, 0);
+    assert!(res.is_ok());
+
+    let _ = std::fs::remove_file(&sample);
+    let _ = std::fs::remove_file(&arch);
+}
